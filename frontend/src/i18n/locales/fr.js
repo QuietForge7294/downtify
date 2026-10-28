@@ -1,5 +1,7 @@
 export default {
   downloadPolicy: {
+    active:
+      'Une tentative est déjà en cours pour ce titre. Attendez sa fin avant de le relancer.',
     block: 'Ne plus télécharger',
     blocked: 'Téléchargements suspendus pour ce titre.',
     confirm: 'Suspendre les téléchargements de ce titre ?',

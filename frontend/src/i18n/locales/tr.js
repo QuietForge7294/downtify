@@ -1,5 +1,7 @@
 export default {
   downloadPolicy: {
+    active:
+      'An attempt is already running for this track. Wait for it to stop before retrying.',
     block: 'Stop downloading',
     blocked: 'Downloads suspended for this track.',
     confirm: 'Suspend downloads for this track?',

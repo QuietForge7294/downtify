@@ -61,9 +61,7 @@
           class="mt-1 flex items-start gap-1.5 text-xs text-danger"
         >
           <AppIcon name="alert" :size="14" class="mt-px" />
-          <span class="line-clamp-2">{{
-            item.message || t('queue.failedGeneric')
-          }}</span>
+          <span class="line-clamp-2">{{ failureMessage }}</span>
         </p>
       </div>
 
@@ -196,6 +194,12 @@ const override = ref('')
 const overrideError = ref('')
 
 const song = computed(() => props.item.song)
+const failureMessage = computed(() => {
+  const message = props.item.message
+  if (message === 'download_excluded') return t('downloadPolicy.blocked')
+  if (message === 'download_already_active') return t('downloadPolicy.active')
+  return message || t('queue.failedGeneric')
+})
 async function suspendDownload() {
   if (
     !(await ui.confirm({
