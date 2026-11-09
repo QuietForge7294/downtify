@@ -1,3 +1,4 @@
+import time
 from datetime import datetime
 
 from ai_test_support import opted_in_store
@@ -82,25 +83,53 @@ def test_generation_yields_before_ranking_when_dj_requests_compute(tmp_path):
         assert db.execute('SELECT count(*) FROM playlists').fetchone()[0] == 0
 
 
-def test_native_sweep_does_not_load_catalog_when_compute_is_busy(
-    tmp_path, monkeypatch
-):
+def _sweep(tmp_path, monkeypatch, lease_kind=None):
     from types import SimpleNamespace
 
     from downtify import api
-    from downtify.music_ai import compute_budget, routes, scheduler
+    from downtify.music_ai import routes
 
     database = opted_in_store(tmp_path / 'derived.db')
     database.set_metadata('model', {'id': 'm', 'ready': True})
+    rows = [
+        {'id': str(i), 'artist': str(i), 'fingerprint': str(i)}
+        for i in range(60)
+    ]
+    database.observe(rows)
+    for row in rows:
+        database.put_analysis(
+            row['id'], row['fingerprint'], 'm', [1] + [0] * 511
+        )
+    with database.connect() as db:
+        for mood in MOODS:
+            db.execute(
+                'INSERT INTO mood_vectors VALUES (?,?,?)',
+                (mood, 'm', Store.pack([1] + [0] * 511)),
+            )
+        if lease_kind is not None:
+            db.execute(
+                'INSERT OR REPLACE INTO compute_lease VALUES (1,?,?,?)',
+                ('token', lease_kind, time.time() + 45),
+            )
     monkeypatch.setattr(routes, 'store', lambda: database)
     monkeypatch.setattr(
         api.state,
         'auth',
         SimpleNamespace(
-            users=SimpleNamespace(get=lambda uid: {'role': 'admin'})
+            users=SimpleNamespace(
+                get=lambda uid: {'role': 'admin', 'username': 'x'}
+            )
         ),
     )
-    monkeypatch.setattr(compute_budget, 'acquire', lambda *args: None)
+    return database, rows
+
+
+def test_native_sweep_does_not_read_catalog_for_a_dj_request(
+    tmp_path, monkeypatch
+):
+    from downtify.music_ai import routes, scheduler
+
+    database, _ = _sweep(tmp_path, monkeypatch, lease_kind='dj')
     monkeypatch.setattr(
         routes,
         'catalog',
@@ -109,3 +138,17 @@ def test_native_sweep_does_not_load_catalog_when_compute_is_busy(
         ),
     )
     scheduler.native_sweep()
+    with database.connect() as db:
+        assert db.execute('SELECT count(*) FROM playlists').fetchone()[0] == 0
+
+
+def test_native_sweep_generates_while_analysis_holds_the_lease(
+    tmp_path, monkeypatch
+):
+    from downtify.music_ai import routes, scheduler
+
+    database, rows = _sweep(tmp_path, monkeypatch, lease_kind='analysis')
+    monkeypatch.setattr(routes, 'catalog', lambda *args: rows)
+    scheduler.native_sweep()
+    with database.connect() as db:
+        assert db.execute('SELECT count(*) FROM playlists').fetchone()[0] == 24

@@ -133,8 +133,35 @@ def generate(store, owner, cadence, mood, rows, model, *, now=None):
     ]
 
 
+def _previous_period(cadence, key):
+    """The period just before `key`, the only fallback a card may show."""
+    day = datetime.fromisoformat(key).date()
+    return (day - timedelta(days=1 if cadence == 'daily' else 7)).isoformat()
+
+
+def _latest(store, owner, cadence, key):
+    """Current mix per mood, or yesterday's while this morning's is not ready.
+
+    A fresh period starts at 04:00 Paris. Until today's mix exists the previous
+    one stays playable, so an early morning open never lands on an empty
+    "preparing" card. Older periods are never resurrected.
+    """
+    with store.connect() as db:
+        found = db.execute(
+            'SELECT mood,period,ids,created FROM playlists '
+            'WHERE owner=? AND cadence=? AND period IN (?,?) '
+            'ORDER BY period DESC, created DESC',
+            (owner, cadence, key, _previous_period(cadence, key)),
+        ).fetchall()
+    latest = {}
+    for mood, stored_period, ids, created in found:
+        if mood in MOODS and mood not in latest:
+            latest[mood] = (stored_period, ids, created)
+    return latest
+
+
 def summaries(store, owner, rows, *, now=None):
-    """List existing current mixes only; never generate or expose hidden tracks."""
+    """List current mixes, falling back to the previous one until it is ready."""
     flags = store.effective(owner)
     keys = {
         cadence: period(cadence, now)
@@ -144,50 +171,46 @@ def summaries(store, owner, rows, *, now=None):
     if not keys:
         return []
     allowed = {row['id'] for row in rows}
-    with store.connect() as db:
-        found = db.execute(
-            'SELECT cadence,mood,period,ids,created FROM playlists WHERE owner=? AND period IN (?,?) ORDER BY cadence,mood',
-            (owner, period('daily', now), period('weekly', now)),
-        ).fetchall()
     result = []
-    for cadence, mood, key, ids, created in found:
-        if keys.get(cadence) != key or mood not in MOODS:
-            continue
-        count = len(set(json.loads(ids)) & allowed)
-        if count:
+    for cadence, key in keys.items():
+        for mood, (stored, ids, created) in sorted(
+            _latest(store, owner, cadence, key).items()
+        ):
+            identities = json.loads(ids)
+            count = len(set(identities) & allowed)
+            if not count:
+                continue
             result.append({
                 'cadence': cadence,
                 'mood': mood,
-                'period': key,
+                'period': stored,
                 'created': created,
                 'count': count,
                 'cover_track_ids': [
-                    identity
-                    for identity in json.loads(ids)
-                    if identity in allowed
+                    identity for identity in identities if identity in allowed
                 ][:4],
-                'state': 'ready',
+                'state': 'ready' if stored == key else 'previous',
             })
     return result
 
 
 def stored_selections(store, owner, *, now=None):
     flags = store.effective(owner)
-    with store.connect() as db:
-        rows = db.execute(
-            'SELECT cadence,mood,period,ids,created FROM playlists WHERE owner=? AND period IN (?,?)',
-            (owner, period('daily', now), period('weekly', now)),
-        ).fetchall()
-    return [
-        dict(
-            cadence=row['cadence'],
-            mood=row['mood'],
-            period=row['period'],
-            ids=json.loads(row['ids']),
-            created=row['created'],
-        )
-        for row in rows
-        if flags.get(row['cadence'])
-        and row['period'] == period(row['cadence'], now)
-        and row['mood'] in MOODS
-    ]
+    selections = []
+    for cadence in ('daily', 'weekly'):
+        if not flags.get(cadence):
+            continue
+        key = period(cadence, now)
+        for mood, (stored, ids, created) in sorted(
+            _latest(store, owner, cadence, key).items()
+        ):
+            selections.append(
+                dict(
+                    cadence=cadence,
+                    mood=mood,
+                    period=stored,
+                    ids=json.loads(ids),
+                    created=created,
+                )
+            )
+    return selections
