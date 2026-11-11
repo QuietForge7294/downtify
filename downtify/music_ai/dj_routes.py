@@ -506,7 +506,7 @@ def command(identity: str, payload: Command, request: Request):
         )
     except PermissionError:
         raise HTTPException(
-            409, 'Le module interactif est désactivé.'
+            409, 'Le DJ interactif est désactivé dans les réglages.'
         ) from None
     except RuntimeError:
         raise HTTPException(

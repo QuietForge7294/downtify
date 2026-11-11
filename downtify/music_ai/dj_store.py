@@ -13,12 +13,8 @@ ACTIVE = ('preparing', 'rendering', 'playing', 'paused')
 MODES = {'prepared': 'dj_prepared', 'interactive': 'dj_interactive'}
 
 
-def enabled(db, owner, mode):
-    paused = db.execute(
-        "SELECT value FROM metadata WHERE key='analysis_paused'"
-    ).fetchone()
-    if paused and json.loads(paused[0]):
-        return False
+def permitted(db, owner, mode):
+    """Feature flags only: a paused analysis never blocks a live set."""
     feature = MODES[mode]
     flags = {}
     for identity in (-1, owner):
@@ -27,6 +23,15 @@ def enabled(db, owner, mode):
         ).fetchone()
         flags[identity] = {**DEFAULTS, **(json.loads(row[0]) if row else {})}
     return flags[-1][feature] and flags[owner][feature]
+
+
+def enabled(db, owner, mode):
+    paused = db.execute(
+        "SELECT value FROM metadata WHERE key='analysis_paused'"
+    ).fetchone()
+    if paused and json.loads(paused[0]):
+        return False
+    return permitted(db, owner, mode)
 
 
 class CancelledDjRequest(Exception):
@@ -529,7 +534,9 @@ class DjStore:
             ).fetchone()
             if row is None:
                 raise LookupError('DJ session unavailable')
-            if row['mode'] != 'interactive' or not enabled(
+            # Playback commands follow the user's choice: pausing the library
+            # analysis must never interrupt a live set already rendered.
+            if row['mode'] != 'interactive' or not permitted(
                 db, owner, 'interactive'
             ):
                 raise PermissionError('Interactive DJ unavailable')
