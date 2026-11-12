@@ -1,15 +1,47 @@
 from __future__ import annotations
 
 import json
+import re
 import struct
 from collections import Counter
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from . import covers
 from .ranking import rank
-from .store import MOODS
+from .store import GENRE_THEMES, MOODS
 
 PARIS = ZoneInfo('Europe/Paris')
+
+# Weekly sets cover nine themes, daily mixes keep the six mood prompts.
+GENRES = {
+    'rap': r'\b(rap|hip[ -]?hop|trap)\b',
+    'rock': r'\b(rock|metal|punk|grunge)\b',
+    'electro': r'\b(electro\w*|house|techno|trance|dance|edm|dubstep)\b',
+}
+WEEKLY_SIZE = 25
+DAILY_SIZE = 40
+
+
+def themes(cadence):
+    if cadence == 'daily':
+        return [mood for mood in MOODS if mood not in GENRE_THEMES]
+    if cadence == 'weekly':
+        return list(MOODS)
+    raise ValueError('Invalid cadence')
+
+
+def genre_rows(theme, rows):
+    """A genre theme never falls back to another style when its tag is missing."""
+    pattern = GENRES.get(theme)
+    if pattern is None:
+        return rows
+    matcher = re.compile(pattern, re.I)
+    return [
+        row
+        for row in rows
+        if matcher.search(str(row.get('genre') or ''))
+    ]
 
 
 def period(cadence, now=None):
@@ -63,17 +95,23 @@ def generate(store, owner, cadence, mood, rows, model, *, now=None):
     # Mood playlists must not silently masquerade as AI when the model is absent.
     if target is None:
         raise RuntimeError('Mood analysis is not ready')
+    candidates = genre_rows(mood, rows)
+    target_size = DAILY_SIZE if cadence == 'daily' else WEEKLY_SIZE
+    if mood in GENRES and len(candidates) < min(target_size, 8):
+        raise RuntimeError(
+            'Not enough local tracks tagged in this genre; fill their metadata '
+            'or pick a mood'
+        )
     vectors = store.vectors(model, set(allowed))
-    analyzed_rows = [row for row in rows if row['id'] in vectors]
-    target_size = 40 if cadence == 'daily' else 50
-    if not analyzed_rows or len(analyzed_rows) < min(target_size, len(rows)):
+    analyzed_rows = [row for row in candidates if row['id'] in vectors]
+    if not analyzed_rows or len(analyzed_rows) < min(target_size, len(candidates)):
         raise RuntimeError('The initial catalog analysis is still in progress')
     result = rank(
         analyzed_rows,
         vectors,
         target=target,
         history=store.history(owner) if features['personalization'] else (),
-        limit=40 if cadence == 'daily' else 50,
+        limit=target_size,
         rotation=f'{owner}:{mood}:{key}',
         proposed=proposed,
     )
@@ -189,6 +227,7 @@ def summaries(store, owner, rows, *, now=None):
                 'cover_track_ids': [
                     identity for identity in identities if identity in allowed
                 ][:4],
+                'cover_url': covers.url(cadence, mood, stored),
                 'state': 'ready' if stored == key else 'previous',
             })
     return result

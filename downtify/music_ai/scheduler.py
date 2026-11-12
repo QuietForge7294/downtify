@@ -5,8 +5,7 @@ from __future__ import annotations
 import json
 import time
 
-from .playlists import generate, period
-from .store import MOODS
+from .playlists import generate, period, themes
 
 
 def refresh_due(
@@ -43,7 +42,7 @@ def refresh_due(
                         (uid, cadence, current),
                     )
                 }
-            missing = set(MOODS) - existing
+            missing = set(themes(cadence)) - existing
             if not missing:
                 continue
             if rows is None:

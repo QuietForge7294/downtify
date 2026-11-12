@@ -12,12 +12,22 @@ def test_catchup_is_user_scoped_and_does_not_repeat(tmp_path):
     store = opted_in_store(tmp_path / 'derived.db')
     for owner in (1, 2):
         store.ensure_user(owner)
-    rows = [
-        {'id': str(i), 'artist': str(i), 'fingerprint': str(i)}
-        for i in range(60)
-    ]
-    store.observe(rows)
-    for row in rows:
+
+    def rows(prefix, start, count):
+        genres = ('rap', 'rock', 'electro', 'Other')
+        return [
+            {
+                'id': f'{prefix}-{i}',
+                'artist': f'{prefix}-{i}',
+                'genre': genres[i % len(genres)],
+                'fingerprint': f'{prefix}-{i}',
+            }
+            for i in range(start, start + count)
+        ]
+
+    catalog = rows('u', 0, 60) + rows('v', 0, 60)
+    store.observe([{**row, 'id': row['id']} for row in catalog])
+    for row in catalog:
         store.put_analysis(row['id'], row['fingerprint'], 'm', [1] + [0] * 511)
     with store.connect() as db:
         for mood in MOODS:
@@ -30,10 +40,10 @@ def test_catchup_is_user_scoped_and_does_not_repeat(tmp_path):
 
     def visible(owner):
         calls.append(owner)
-        return rows[:50] if owner == 1 else rows[50:]
+        return rows('u', 0, 60) if owner == 1 else rows('v', 0, 60)
 
     now = datetime(2026, 11, 5, 13, tzinfo=PARIS)
-    assert refresh_due(store, 'm', lambda uid: True, visible, now=now) == 18
+    assert refresh_due(store, 'm', lambda uid: True, visible, now=now) == 24
     assert sorted(calls) == [1, 2]
     calls.clear()
     assert refresh_due(store, 'm', lambda uid: True, visible, now=now) == 0

@@ -77,6 +77,15 @@ profile does not delete liked songs or saved native playlists.
 
 Daily playlists rotate at 04:00 Europe/Paris; weekly selections rotate Monday at
 04:15, including catch-up after restart. Native saved copies remain stable.
+The daily mix keeps the six mood prompts; the weekly set covers nine themes
+(six moods plus the three genre themes rap, rock and electro). A genre theme
+never falls back to another style: it is offered only once the native library
+holds enough tracks tagged in that genre, otherwise the set stays pending so a
+later metadata completion fills it. Weekly sets hold twenty-five distinct
+titles. Each playlist card exposes a deterministic cover at
+`GET /api/v1/music-ai/playlists/{cadence}/{mood}/cover.svg?period=…` (same key,
+same picture, cached for a day); the client may show it alongside the four
+cover track ids.
 
 ## Optional prepared DJ renderer
 
