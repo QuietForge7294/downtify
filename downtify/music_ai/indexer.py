@@ -10,6 +10,7 @@ from .catalog import (
     recent_addition,
     scheduled,
     synchronize,
+    unanalysed,
 )
 from .routes import store
 from .store import ANALYSIS_FEATURES
@@ -41,6 +42,13 @@ def index_pass():
         return
     synchronize(database, mobile_routes._sync())
     ensure_analysis_queue(database, identity)
+    missing = unanalysed(database, identity)
+    if missing:
+        with database.connect() as db:
+            db.executemany(
+                'INSERT OR IGNORE INTO catalog_pending(id,priority) VALUES (?,0)',
+                [(value,) for value in missing],
+            )
     context = api.library_context()
     generation = database.metadata('analysis_generation', 0)
     favorites = (

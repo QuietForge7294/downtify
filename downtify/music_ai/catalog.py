@@ -143,6 +143,38 @@ def ensure_analysis_queue(database, model):
         )
 
 
+def unanalysed(database, model, *, limit=25):
+    """Live tracks with no current analysis and no queued or exhausted retry.
+
+    A track whose analysis row vanished without a catalog change (a full native
+    resync, a lost write) used to stay invisible forever: it was neither
+    analysed nor pending. This bounded query is the only way back in, and it
+    skips tracks whose analysis job already used its retries so a broken file
+    never becomes an endless queue.
+    """
+    restriction = (
+        ' JOIN catalog_live l ON l.id=t.id'
+        if database.metadata('native_catalog_initialized', False)
+        else ''
+    )
+    with database.connect() as db:
+        return [
+            row[0]
+            for row in db.execute(
+                'SELECT t.id FROM tracks t'
+                + restriction
+                + ' LEFT JOIN analyses a ON a.id=t.id AND a.model=? AND a.fingerprint=t.fingerprint'
+                + ' LEFT JOIN catalog_pending p ON p.id=t.id'
+                + ' WHERE a.id IS NULL AND p.id IS NULL AND NOT EXISTS ('
+                + "SELECT 1 FROM jobs j WHERE j.kind='analysis'"
+                + " AND j.state='failed' AND j.attempts>=3"
+                + " AND json_extract(j.payload,'$.track')=t.id)"
+                + ' ORDER BY t.id LIMIT ?',
+                (model, limit),
+            )
+        ]
+
+
 def scheduled(database, identity):
     with database.connect() as db:
         db.execute('DELETE FROM catalog_pending WHERE id=?', (identity,))

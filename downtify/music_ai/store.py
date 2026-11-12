@@ -104,6 +104,10 @@ class Store:
                 db.execute(
                     'ALTER TABLE listens ADD COLUMN sequence INTEGER NOT NULL DEFAULT 0'
                 )
+            # Track-level retry lookup for the reconciliation pass; bounded to analysis jobs.
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS jobs_analysis_track ON jobs(json_extract(payload,'$.track')) WHERE kind='analysis'"
+            )
             self._freeze_existing_preferences(db)
 
     @staticmethod
