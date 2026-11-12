@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import secrets
 import time
 
@@ -454,7 +455,11 @@ class DjStore:
                 'SELECT document,state,created FROM dj_sessions WHERE id=? AND owner=?',
                 (identity, owner),
             ).fetchone()
-            if row is None or row['state'] not in {'playing', 'paused', 'ready'}:
+            if row is None or row['state'] not in {
+                'playing',
+                'paused',
+                'ready',
+            }:
                 return None
             document = json.loads(row['document'])
             if 'ready_seconds' in document:
@@ -539,12 +544,23 @@ class DjStore:
             )
             db.execute('DELETE FROM dj_sources WHERE session=?', (identity,))
 
-    def command(self, owner, identity, nonce, action, payload, *, now=None):
+    def command(
+        self,
+        owner,
+        identity,
+        nonce,
+        action,
+        payload,
+        *,
+        now=None,
+        navigation=None,
+    ):
         now = time.time() if now is None else now
         if (
             not isinstance(nonce, str)
             or not 1 <= len(nonce) <= 128
-            or action not in {'pause', 'resume', 'next', 'replace', 'theme'}
+            or action
+            not in {'pause', 'resume', 'next', 'previous', 'replace', 'theme'}
             or not isinstance(payload, dict)
         ):
             raise ValueError('Invalid DJ command')
@@ -562,11 +578,29 @@ class DjStore:
                 db, owner, 'interactive'
             ):
                 raise PermissionError('Interactive DJ unavailable')
-            if row['state'] not in ACTIVE or row['lease_until'] <= now:
+            cached_navigation = navigation is not None and row['state'] in {
+                'playing',
+                'paused',
+                'ready',
+            }
+            if not cached_navigation and (
+                row['state'] not in ACTIVE or row['lease_until'] <= now
+            ):
                 raise RuntimeError('DJ session is not rendering')
             document = json.loads(row['document'])
-            if action in {'pause', 'resume', 'next'} and payload:
+            if action in {'pause', 'resume'} and payload:
                 raise ValueError('This command has no payload')
+            if action in {'next', 'previous'} and payload:
+                if set(payload) != {'position'}:
+                    raise ValueError('Invalid navigation payload')
+                position = float(payload['position'])
+                if (
+                    not math.isfinite(position)
+                    or not 0 <= position <= 1_000_000
+                ):
+                    raise ValueError('Invalid playback position')
+            if action == 'previous' and navigation is None:
+                raise ValueError('Previous requires a published marker')
             if action == 'theme' and (
                 set(payload) != {'theme'}
                 or not isinstance(payload['theme'], str)
@@ -600,6 +634,22 @@ class DjStore:
             ).fetchone()
             if result:
                 return json.loads(result[0])
+            if navigation is not None:
+                db.execute(
+                    'INSERT INTO dj_command_results VALUES (?,?,?)',
+                    (identity, nonce, json.dumps(navigation)),
+                )
+                db.execute(
+                    'UPDATE dj_commands SET state=? WHERE session=? AND nonce=?',
+                    (
+                        ('queued' if row['state'] in ACTIVE else 'applied')
+                        if navigation['accepted']
+                        else 'rejected',
+                        identity,
+                        nonce,
+                    ),
+                )
+                return navigation
             delay = (
                 0.0
                 if action in {'pause', 'resume'}
@@ -629,9 +679,12 @@ class DjStore:
                     'nonce': command[0],
                     'action': command[1],
                     'payload': json.loads(command[2]),
+                    'navigation': json.loads(command[3])
+                    if command[3]
+                    else None,
                 }
                 for command in db.execute(
-                    "SELECT nonce,action,payload FROM dj_commands WHERE session=? AND state='queued' ORDER BY queued,nonce LIMIT 32",
+                    "SELECT c.nonce,c.action,c.payload,r.result FROM dj_commands c LEFT JOIN dj_command_results r ON c.session=r.session AND c.nonce=r.nonce WHERE c.session=? AND c.state='queued' ORDER BY c.queued,c.nonce LIMIT 32",
                     (identity,),
                 )
             ]
@@ -660,7 +713,7 @@ class DjStore:
             )
             if found.rowcount:
                 db.execute(
-                    'INSERT INTO dj_command_results VALUES (?,?,?)',
+                    'INSERT OR IGNORE INTO dj_command_results VALUES (?,?,?)',
                     (identity, nonce, json.dumps(result)),
                 )
             return bool(found.rowcount)

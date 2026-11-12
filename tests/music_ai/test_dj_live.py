@@ -151,6 +151,41 @@ def test_real_hls_encoder_handles_live_controls_without_rewriting_originals(
     }
 
 
+def test_published_audio_navigation_updates_renderer_cursor_without_resuming(
+    tmp_path,
+):
+    worker, io, results, _, _ = fixture(tmp_path)
+    renderer = LiveRenderer(worker, io, results, clock=lambda: 10.0)
+    renderer.paused = True
+    renderer.anchor_position, renderer.anchor = 2.0, 0.0
+    receipt = {
+        'accepted': True,
+        'seek_to_seconds': 18.0,
+        'effective_after_seconds': 0.0,
+    }
+    assert (
+        worker.dj.command(
+            1,
+            worker.job['id'],
+            'navigate',
+            'next',
+            {'position': '2'},
+            navigation=receipt,
+        )
+        == receipt
+    )
+    renderer.commands()
+    assert renderer.paused is True
+    assert renderer.position() == 18.0
+    assert (
+        worker.dj.pending_commands(worker.job['id'], worker.job['lease_token'])
+        == []
+    )
+    assert worker.dj.command_results(worker.job['id']) == [
+        {'request_id': 'navigate', **receipt}
+    ]
+
+
 def test_live_module_disable_stops_encoder_and_cleans_decoded_audio(tmp_path):
     worker, io, results, _, store = fixture(tmp_path)
     clock = [0.0]

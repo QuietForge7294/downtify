@@ -288,7 +288,11 @@ class AudioIO:
             timeout=300,
         )
         try:
-            stats = json.loads(diagnostic[diagnostic.rfind(b'{') :])
+            # FFmpeg 7 can append its output summary after the loudnorm JSON.
+            # Decode one object, retaining the bounded diagnostic and finite checks.
+            stats, _ = json.JSONDecoder().raw_decode(
+                diagnostic[diagnostic.rfind(b'{') :].decode('utf-8')
+            )
             result = {
                 key: float(stats[key]) for key in ('input_i', 'input_tp')
             }

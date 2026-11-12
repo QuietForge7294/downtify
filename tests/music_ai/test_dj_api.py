@@ -432,6 +432,60 @@ def test_hls_resources_are_owned_visible_no_store_and_manifest_cannot_escape(
     )
 
 
+def test_completed_stream_navigation_is_owned_idempotent_and_does_not_resume(
+    client,
+):
+    from datetime import datetime, timezone
+
+    http, database, _, _ = client
+    identity = validation_session(client).json()['id']
+    store = DjStore(database)
+    job = store.claim()
+    origin = 1_700_000_000
+    assert store.publish(
+        identity,
+        job['lease_token'],
+        'ready',
+        {
+            'media_origin': origin,
+            'timeline': [
+                {'id': 'one', 'start': 0, 'end': 180},
+                {'id': 'two', 'start': 180, 'end': 360},
+            ],
+        },
+    )
+    folder = database.path.parent / 'dj' / identity
+    folder.mkdir(parents=True)
+    stamp = datetime.fromtimestamp(origin + 180, timezone.utc).isoformat()
+    (folder / 'index.m3u8').write_text(
+        f'#EXTM3U\n#EXT-X-PROGRAM-DATE-TIME:{stamp}\n'
+        '#EXTINF:6,\nsegment-00000030.ts\n'
+    )
+    (folder / 'segment-00000030.ts').write_bytes(b'audio')
+    url = f'/api/v1/music-ai/dj/sessions/{identity}/commands'
+    payload = {
+        'request_id': 'jump',
+        'action': 'next',
+        'payload': {'position': '175'},
+    }
+    headers = {'x-test-user': '1'}
+    result = http.post(url, headers=headers, json=payload)
+    assert result.status_code == 202
+    assert result.json()['seek_to_seconds'] == 180
+    assert (
+        http.post(url, headers=headers, json=payload).json() == result.json()
+    )
+    assert store.get(1, identity)['state'] == 'ready'
+    assert (
+        http.post(url, headers={'x-test-user': '2'}, json=payload).status_code
+        == 404
+    )
+    changed = {**payload, 'payload': {'position': '176'}}
+    assert http.post(url, headers=headers, json=changed).status_code == 422
+    database.set_preferences(1, {'dj_interactive': False})
+    assert http.post(url, headers=headers, json=payload).status_code == 409
+
+
 def test_command_api_receipts_and_continuity_remain_owner_scoped(client):
     http, database, _, _ = client
     identity = validation_session(client).json()['id']

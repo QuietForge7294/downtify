@@ -477,7 +477,7 @@ def create_session(payload, request, *, validation=False):
 class Command(BaseModel):
     model_config = ConfigDict(extra='forbid')
     request_id: str = Field(min_length=1, max_length=128)
-    action: Literal['pause', 'resume', 'next', 'replace', 'theme']
+    action: Literal['pause', 'resume', 'next', 'previous', 'replace', 'theme']
     payload: dict[str, str] = Field(default_factory=dict, max_length=1)
 
 
@@ -494,15 +494,25 @@ def cancel_creation(nonce: str, request: Request):
 
 @router.post('/sessions/{identity}/commands', status_code=202)
 def command(identity: str, payload: Command, request: Request):
+    from . import routes as base
+    from .dj_navigation import navigation
+
     session = owned(request, identity)
     visible_session(request, session)
     try:
+        receipt = navigation(
+            session,
+            payload.action,
+            payload.payload,
+            base.store().path.resolve().parent / 'dj',
+        )
         return database().command(
             session['owner'],
             identity,
             payload.request_id,
             payload.action,
             payload.payload,
+            navigation=receipt,
         )
     except PermissionError:
         raise HTTPException(
