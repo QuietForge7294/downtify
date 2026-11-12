@@ -52,10 +52,10 @@ def store(tmp_path):
 NOW = datetime(2026, 11, 12, 10, tzinfo=PARIS)
 
 
-def test_daily_keeps_six_moods_and_weekly_covers_nine_themes():
+def test_daily_keeps_six_moods_and_weekly_includes_pop():
     assert len(themes('daily')) == 6
     assert set(themes('daily')).isdisjoint(GENRE_THEMES)
-    assert len(themes('weekly')) == 9
+    assert len(themes('weekly')) == 10
     assert set(GENRE_THEMES) <= set(themes('weekly'))
     with pytest.raises(ValueError):
         themes('monthly')
@@ -99,3 +99,12 @@ def test_cover_is_deterministic_and_period_bound():
     assert first.startswith('<svg')
     assert first.endswith('</svg>')
     assert len(first) < 4096
+
+
+def test_pop_is_a_real_genre_filter():
+    rows = [
+        {'id': 'pop', 'genre': 'Synth-Pop'},
+        {'id': 'rap', 'genre': 'Rap'},
+        {'id': 'none', 'genre': ''},
+    ]
+    assert [row['id'] for row in genre_rows('pop', rows)] == ['pop']

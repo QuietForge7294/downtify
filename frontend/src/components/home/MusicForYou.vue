@@ -252,6 +252,10 @@ const moods = {
   fete: { label: 'Fête', color: 'from-fuchsia-800 to-purple-800' },
   melancolie: { label: 'Mélancolie', color: 'from-blue-800 to-slate-700' },
   detente: { label: 'Détente', color: 'from-teal-800 to-emerald-800' },
+  rock: { label: 'Rock', color: 'from-red-900 to-red-700' },
+  rap: { label: 'Rap & Hip-Hop', color: 'from-yellow-900 to-amber-700' },
+  electro: { label: 'Électro', color: 'from-sky-900 to-blue-700' },
+  pop: { label: 'Pop', color: 'from-pink-900 to-rose-700' },
 }
 const enabled = (key) => musicAI.capabilities.value?.features?.[key] === true
 const cards = computed(() =>

@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from . import covers
 from .playlists import period, stored_selections, summaries
 from .ranking import rank
-from .store import MOODS, Store
+from .store import GENRE_THEMES, MOODS, Store
 
 router = APIRouter(prefix='/api/v1/music-ai', tags=['Optional music AI'])
 
@@ -325,7 +325,7 @@ def capabilities(request: Request):
         'profile_revision': store().metadata(f'profile_revision:{uid}', 0),
         'features': store().effective(uid),
         'model': store().metadata('model', {'ready': False}),
-        'moods': list(MOODS),
+        'moods': list(MOODS) + list(GENRE_THEMES),
         'dj': dj,
         'source_available': Path('/downtify/music-ai-source.tar.gz').is_file(),
     }
@@ -425,9 +425,12 @@ def playlist_cards(request, home_only=False):
         selections = [
             item
             for item in selections
-            if item['cadence'] == 'daily'
-            and item['mood']
-            in {'detente', 'concentration', 'energie', 'calme'}
+            if (
+                item['cadence'] == 'daily'
+                and item['mood']
+                in {'detente', 'concentration', 'energie', 'calme'}
+            )
+            or (item['cadence'] == 'weekly' and item['mood'] in GENRE_THEMES)
         ]
     identities = list(
         dict.fromkeys(
@@ -448,7 +451,7 @@ async def home(request: Request):
     if any(flags[key] for key in ('daily', 'weekly', 'personalization')):
         ready = (
             await asyncio.to_thread(playlist_cards, request, True)
-            if flags['daily']
+            if flags['daily'] or flags['weekly']
             else []
         )
         for mood, title in [
@@ -477,6 +480,27 @@ async def home(request: Request):
                 }
             )
             result[-1] = {**result[-1], 'title': title}
+    if flags['weekly']:
+        for mood in GENRE_THEMES:
+            card = next(
+                (
+                    item
+                    for item in ready
+                    if item['cadence'] == 'weekly' and item['mood'] == mood
+                ),
+                None,
+            )
+            result.append(
+                card
+                or {
+                    'cadence': 'weekly',
+                    'mood': mood,
+                    'period': period('weekly'),
+                    'count': 0,
+                    'state': 'preparing',
+                    'cover_track_ids': [],
+                }
+            )
     value = {'cards': result}
     etag = (
         '"'
@@ -500,7 +524,9 @@ def playlist_cover(
 ):
     """Deterministic local cover: the same set always gets the same picture."""
     require(request, cadence)
-    if mood not in MOODS:
+    if mood not in MOODS and not (
+        cadence == 'weekly' and mood in GENRE_THEMES
+    ):
         raise HTTPException(404, 'Unknown mood')
     key = period_key or period(cadence)
     if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', key):
@@ -521,7 +547,9 @@ async def mood_playlist(
     cadence: Literal['daily', 'weekly'], mood: str, request: Request
 ):
     uid = require(request, cadence)
-    if mood not in MOODS:
+    if mood not in MOODS and not (
+        cadence == 'weekly' and mood in GENRE_THEMES
+    ):
         raise HTTPException(404, 'Unknown mood')
     selections = stored_selections(store(), uid)
     chosen = next(

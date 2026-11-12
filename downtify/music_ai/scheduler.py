@@ -82,7 +82,7 @@ def native_sweep():
 
     from .. import api
     from ..auth import ADMIN, USER, Principal
-    from .routes import catalog, store
+    from .routes import catalog, favorite_ids, store
 
     status = store().metadata('model', {})
     if not status.get('ready') or store().metadata('native_busy', False):
@@ -118,6 +118,8 @@ def native_sweep():
             'headers': [],
             'state': {'principal': principal},
         })
-        return catalog(request)
+        rows = catalog(request)
+        favorites = favorite_ids(request, rows)
+        return [{**row, 'favorite': row['id'] in favorites} for row in rows]
 
     refresh_due(store(), status['id'], user_for, rows_for)

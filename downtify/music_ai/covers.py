@@ -12,6 +12,7 @@ PALETTES = {
     'melancolie': ('#101828', '#3b82f6'),
     'detente': ('#0b2b26', '#2dd4bf'),
     'rap': ('#1a1a1a', '#facc15'),
+    'pop': ('#350b28', '#f472b6'),
     'rock': ('#2b0d0d', '#ef4444'),
     'electro': ('#0b1030', '#38bdf8'),
 }

@@ -14,7 +14,7 @@ def test_catchup_is_user_scoped_and_does_not_repeat(tmp_path):
         store.ensure_user(owner)
 
     def rows(prefix, start, count):
-        genres = ('rap', 'rock', 'electro', 'Other')
+        genres = ('rap', 'rock', 'electro', 'Pop')
         return [
             {
                 'id': f'{prefix}-{i}',
@@ -43,7 +43,7 @@ def test_catchup_is_user_scoped_and_does_not_repeat(tmp_path):
         return rows('u', 0, 60) if owner == 1 else rows('v', 0, 60)
 
     now = datetime(2026, 11, 5, 13, tzinfo=PARIS)
-    assert refresh_due(store, 'm', lambda uid: True, visible, now=now) == 24
+    assert refresh_due(store, 'm', lambda uid: True, visible, now=now) == 26
     assert sorted(calls) == [1, 2]
     calls.clear()
     assert refresh_due(store, 'm', lambda uid: True, visible, now=now) == 0
