@@ -497,6 +497,10 @@ class DjWorker:
         if not published:
             target.unlink(missing_ok=True)
             raise PermissionError('dj_session_stopped')
+        # Prepared readiness is the render itself: the client can play the file.
+        from .dj_readiness import record as record_readiness
+
+        record_readiness(self.dj.database, 'prepared', elapsed)
 
     def step(self):
         self.capabilities()

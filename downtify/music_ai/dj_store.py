@@ -445,6 +445,28 @@ class DjStore:
             )
         return True
 
+    def record_ready(self, owner, identity, *, now=None):
+        """First manifest read: store the delay the listener actually waited for."""
+        now = time.time() if now is None else now
+        with self.database.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute(
+                'SELECT document,state,created FROM dj_sessions WHERE id=? AND owner=?',
+                (identity, owner),
+            ).fetchone()
+            if row is None or row['state'] not in {'playing', 'paused', 'ready'}:
+                return None
+            document = json.loads(row['document'])
+            if 'ready_seconds' in document:
+                return None
+            seconds = round(max(0.0, now - row['created']), 3)
+            document.update(ready_seconds=seconds, ready_at=now)
+            db.execute(
+                'UPDATE dj_sessions SET document=? WHERE id=? AND owner=?',
+                (json.dumps(document), identity, owner),
+            )
+        return seconds
+
     def consumer(self, owner, identity):
         """Record only an authenticated, ACL-checked HLS reader; no client identity."""
         with self.database.connect() as db:

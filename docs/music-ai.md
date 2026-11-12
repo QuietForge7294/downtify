@@ -120,6 +120,14 @@ Upstream sources and notices checked 2026-11-05/06:
 
 ## Interactive HLS and validation gate
 
+Readiness is measured where the listener feels it. An interactive set records
+`ready_seconds` on the first successful manifest read; a prepared set records
+`preparation_seconds` when the renderer publishes its file. Both stay in the
+private session document. A bounded rolling history (200 entries) is exposed
+to administrators at `GET /api/v1/music-ai/dj/readiness` with `p50`, `p95`,
+worst delay and the count above the ten-second target. The measurement adds no
+client identity, audio or track metadata and never delays the response.
+
 The interactive renderer uses one continuous AAC encoder, six-second HLS
 segments and a 24-second render horizon. A twelve-segment manifest and four
 extra segments support short network interruptions. Only completed files are
