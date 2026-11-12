@@ -41,7 +41,7 @@ MOODS = {
 # the centroid of the genre's analysed tracks. They live outside MOODS so the
 # analysis worker keeps publishing exactly the six pinned mood vectors that the
 # bundled CLAP release supports (see encoder.verify_manifest / publish_model).
-GENRE_THEMES = ('rap', 'rock', 'electro')
+GENRE_THEMES = ('rap', 'rock', 'electro', 'pop')
 
 
 class Store:

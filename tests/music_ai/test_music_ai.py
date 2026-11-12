@@ -234,3 +234,79 @@ def test_playlist_cannot_reappear_after_concurrent_shutdown(
         generate(store, 1, 'daily', 'calme', rows, 'm')
     with store.connect() as db:
         assert db.execute('SELECT count(*) FROM playlists').fetchone()[0] == 0
+
+
+def test_personal_taste_guides_moods_and_stays_user_scoped():
+    import time
+    import numpy as np
+
+    rows = [
+        {'id': key, 'artist': key}
+        for key in ('up', 'down', 'liked-up', 'liked-down')
+    ]
+    vectors = {
+        'up': np.array([0.8, 0.6]),
+        'down': np.array([0.8, -0.6]),
+        'liked-up': np.array([0.0, 1.0]),
+        'liked-down': np.array([0.0, -1.0]),
+    }
+    kwargs = dict(target=np.array([1.0, 0.0]), rotation='mood', limit=1)
+
+    def heard(key):
+        return [
+            {
+                'track': key,
+                'outcome': 'complete',
+                'seconds': 180,
+                'at': time.time(),
+            }
+        ]
+
+    assert (
+        rank(rows, vectors, history=heard('liked-up'), **kwargs)[0]['id']
+        == 'up'
+    )
+    assert (
+        rank(rows, vectors, history=heard('liked-down'), **kwargs)[0]['id']
+        == 'down'
+    )
+    assert (
+        rank(rows, vectors, favorites=['liked-up'], **kwargs)[0]['id'] == 'up'
+    )
+    assert rank(rows, vectors, favorites=['hidden'], **kwargs) == rank(
+        rows, vectors, **kwargs
+    )
+
+
+def test_mix_rotation_penalizes_artists_already_proposed():
+    rows = [{'id': str(i), 'artist': f'artist-{i // 2}'} for i in range(20)]
+    vectors = {row['id']: vector() for row in rows}
+    kwargs = dict(target=vector(), rotation='same-period', limit=5)
+    first = rank(rows, vectors, **kwargs)
+    repeated = {row['artist']: 20 for row in first}
+    rotated = rank(rows, vectors, proposed_artists=repeated, **kwargs)
+    assert set(row['artist'] for row in rotated).isdisjoint(repeated)
+    assert len({row['artist'] for row in rotated}) == 5
+
+
+def test_an_early_skip_is_less_likely_to_be_proposed_again():
+    import time
+
+    rows = [{'id': str(i), 'artist': str(i)} for i in range(6)]
+    vectors = {row['id']: vector() for row in rows}
+    kwargs = dict(target=vector(), rotation='skip-check', limit=1)
+    first = rank(rows, vectors, **kwargs)[0]['id']
+    result = rank(
+        rows,
+        vectors,
+        history=[
+            {
+                'track': first,
+                'outcome': 'skip',
+                'seconds': 2,
+                'at': time.time(),
+            }
+        ],
+        **kwargs,
+    )
+    assert result[0]['id'] != first

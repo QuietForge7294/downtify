@@ -13,8 +13,9 @@ from .store import GENRE_THEMES, MOODS
 
 PARIS = ZoneInfo('Europe/Paris')
 
-# Weekly sets cover nine themes, daily mixes keep the six mood prompts.
+# Weekly mixes include genre themes; daily mixes keep the six mood prompts.
 GENRES = {
+    'pop': r'\b(pop|k[ -]?pop|j[ -]?pop|synth[ -]?pop|britpop)\b',
     'rap': r'\b(rap|hip[ -]?hop|trap)\b',
     'rock': r'\b(rock|metal|punk|grunge)\b',
     'electro': r'\b(electro\w*|house|techno|trance|dance|edm|dubstep)\b',
@@ -37,11 +38,7 @@ def genre_rows(theme, rows):
     if pattern is None:
         return rows
     matcher = re.compile(pattern, re.I)
-    return [
-        row
-        for row in rows
-        if matcher.search(str(row.get('genre') or ''))
-    ]
+    return [row for row in rows if matcher.search(str(row.get('genre') or ''))]
 
 
 def period(cadence, now=None):
@@ -104,7 +101,9 @@ def generate(store, owner, cadence, mood, rows, model, *, now=None):
         )
     vectors = store.vectors(model, set(allowed))
     analyzed_rows = [row for row in candidates if row['id'] in vectors]
-    if not analyzed_rows or len(analyzed_rows) < min(target_size, len(candidates)):
+    if not analyzed_rows or len(analyzed_rows) < min(
+        target_size, len(candidates)
+    ):
         raise RuntimeError('The initial catalog analysis is still in progress')
     if mood in GENRE_THEMES:
         # A genre theme ranks against the centroid of its analysed tracks,
@@ -112,9 +111,7 @@ def generate(store, owner, cadence, mood, rows, model, *, now=None):
         # six mood vectors, so there is no genre mood_vector to look up).
         import numpy as np
 
-        target = np.mean(
-            [vectors[row['id']] for row in analyzed_rows], axis=0
-        )
+        target = np.mean([vectors[row['id']] for row in analyzed_rows], axis=0)
     elif target is None:
         # Mood playlists must not silently masquerade as AI when the model is absent.
         raise RuntimeError('Mood analysis is not ready')
@@ -123,6 +120,15 @@ def generate(store, owner, cadence, mood, rows, model, *, now=None):
         vectors,
         target=target,
         history=store.history(owner) if features['personalization'] else (),
+        favorites=[row['id'] for row in rows if row.get('favorite')]
+        if features['personalization']
+        else (),
+        proposed_artists=Counter(
+            str(allowed[tid].get('artist') or '').casefold().strip()
+            for tid, count in proposed.items()
+            if tid in allowed
+            for _ in range(count)
+        ),
         limit=target_size,
         rotation=f'{owner}:{mood}:{key}',
         proposed=proposed,
