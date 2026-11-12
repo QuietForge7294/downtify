@@ -35,12 +35,12 @@ MOODS = {
     'fete': 'Upbeat dance party music with a strong beat',
     'melancolie': 'Melancholic emotional music with a sad reflective mood',
     'detente': 'Relaxed warm soothing music for unwinding',
-    'rap': 'Confident rap and hip-hop with a strong beat and spoken flow',
-    'rock': 'Energetic rock music with electric guitars and a driving beat',
-    'electro': 'Electronic dance music with a steady four on the floor beat',
 }
 
-# Genre themes narrow the catalog by its native tag before the mood ranking.
+# Weekly genre themes narrow the catalog by its native tag and rank against
+# the centroid of the genre's analysed tracks. They live outside MOODS so the
+# analysis worker keeps publishing exactly the six pinned mood vectors that the
+# bundled CLAP release supports (see encoder.verify_manifest / publish_model).
 GENRE_THEMES = ('rap', 'rock', 'electro')
 
 
@@ -156,12 +156,16 @@ class Store:
             row = db.execute(
                 'SELECT value FROM preferences WHERE owner=?', (owner,)
             ).fetchone()
-        return {**DEFAULTS, **(json.loads(row[0]) if row else {})}
+        merged = {**DEFAULTS, **(json.loads(row[0]) if row else {})}
+        # Always emit booleans: the API contract is features/preferences as
+        # {key: bool}. Stored values can drift to truthy ints (e.g. 1) via other
+        # writers, which would break the clients' Map<String,Boolean> decoding.
+        return {key: bool(value) for key, value in merged.items()}
 
     def effective(self, owner: int) -> dict[str, bool]:
         global_flags = self.preferences(-1)
         own = self.preferences(owner)
-        return {key: global_flags[key] and own[key] for key in DEFAULTS}
+        return {key: bool(global_flags[key] and own[key]) for key in DEFAULTS}
 
     def ensure_user(self, owner: int):
         if owner <= 0:

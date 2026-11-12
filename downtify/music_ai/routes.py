@@ -319,6 +319,7 @@ def capabilities(request: Request):
         'home_cards': True,
         'dj_request_cancel': True,
         'dj_light_status': True,
+        'dj_navigation': True,
         'dj_seed_mix': True,
         'administrator': api.request_is_admin(request),
         'profile_revision': store().metadata(f'profile_revision:{uid}', 0),

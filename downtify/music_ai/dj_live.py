@@ -387,7 +387,17 @@ class LiveRenderer:
             worker.job['id'], worker.job['lease_token']
         ):
             action = command['action']
-            if action in {'pause', 'resume'}:
+            navigation = command.get('navigation')
+            if (
+                navigation
+                and navigation.get('accepted')
+                and 'seek_to_seconds' in navigation
+            ):
+                # A seek changes the transport cursor, never the latest pause intent.
+                self.anchor_position = navigation['seek_to_seconds']
+                self.anchor = self.clock()
+                self.complete(command, navigation)
+            elif action in {'pause', 'resume'}:
                 position = self.position()
                 self.paused = action == 'pause'
                 self.anchor_position, self.anchor = position, self.clock()
