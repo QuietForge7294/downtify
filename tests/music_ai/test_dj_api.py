@@ -396,6 +396,11 @@ def test_hls_resources_are_owned_visible_no_store_and_manifest_cannot_escape(
     result = http.get(url + 'index.m3u8', headers=headers)
     assert result.status_code == 200
     assert 'no-store' in result.headers['cache-control']
+    ready = store.get(1, identity)['ready_seconds']
+    assert ready >= 0
+    # Only the first playable manifest read counts, not every reload.
+    assert http.get(url + 'index.m3u8', headers=headers).status_code == 200
+    assert store.get(1, identity)['ready_seconds'] == ready
     assert (
         http.get(
             url + 'segment-00000000.ts',

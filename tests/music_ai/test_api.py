@@ -136,6 +136,7 @@ def test_playlist_cards_are_current_owned_and_visibility_filtered(
             (1, 'daily', 'calme', '2026-11-06', ['one', 'hidden']),
             (2, 'daily', 'fete', '2026-11-06', ['two']),
             (1, 'daily', 'energie', '2026-11-05', ['one']),
+            (1, 'daily', 'detente', '2026-11-04', ['one']),
             (1, 'weekly', 'concentration', '2026-11-02', ['two']),
         ]:
             db.execute(
@@ -152,9 +153,13 @@ def test_playlist_cards_are_current_owned_and_visibility_filtered(
     )
     assert response.status_code == 200
     rows = response.json()['playlists']
-    assert [(row['cadence'], row['mood'], row['count']) for row in rows] == [
-        ('daily', 'calme', 1),
-        ('weekly', 'concentration', 1),
+    assert [
+        (row['cadence'], row['mood'], row['count'], row['state'])
+        for row in rows
+    ] == [
+        ('daily', 'calme', 1, 'ready'),
+        ('daily', 'energie', 1, 'previous'),
+        ('weekly', 'concentration', 1, 'ready'),
     ]
     assert not any(
         key in response.text

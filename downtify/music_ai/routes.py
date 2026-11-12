@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 import time
 from functools import lru_cache, wraps
 from pathlib import Path
@@ -14,6 +15,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
+from . import covers
 from .playlists import period, stored_selections, summaries
 from .ranking import rank
 from .store import MOODS, Store
@@ -486,6 +488,31 @@ async def home(request: Request):
     if request.headers.get('if-none-match') == etag:
         return Response(status_code=304, headers=headers)
     return JSONResponse(value, headers=headers)
+
+
+@router.get('/playlists/{cadence}/{mood}/cover.svg')
+def playlist_cover(
+    cadence: Literal['daily', 'weekly'],
+    mood: str,
+    request: Request,
+    period_key: str = Query('', alias='period'),
+):
+    """Deterministic local cover: the same set always gets the same picture."""
+    require(request, cadence)
+    if mood not in MOODS:
+        raise HTTPException(404, 'Unknown mood')
+    key = period_key or period(cadence)
+    if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', key):
+        raise HTTPException(422, 'Invalid period')
+    uid = owner(request)
+    return Response(
+        covers.svg(f'{uid}:{cadence}:{mood}:{key}', mood),
+        media_type='image/svg+xml',
+        headers={
+            'Cache-Control': 'private, max-age=86400',
+            'X-Content-Type-Options': 'nosniff',
+        },
+    )
 
 
 @router.get('/playlists/{cadence}/{mood}')

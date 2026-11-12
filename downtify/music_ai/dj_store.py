@@ -13,12 +13,8 @@ ACTIVE = ('preparing', 'rendering', 'playing', 'paused')
 MODES = {'prepared': 'dj_prepared', 'interactive': 'dj_interactive'}
 
 
-def enabled(db, owner, mode):
-    paused = db.execute(
-        "SELECT value FROM metadata WHERE key='analysis_paused'"
-    ).fetchone()
-    if paused and json.loads(paused[0]):
-        return False
+def permitted(db, owner, mode):
+    """Feature flags only: a paused analysis never blocks a live set."""
     feature = MODES[mode]
     flags = {}
     for identity in (-1, owner):
@@ -27,6 +23,15 @@ def enabled(db, owner, mode):
         ).fetchone()
         flags[identity] = {**DEFAULTS, **(json.loads(row[0]) if row else {})}
     return flags[-1][feature] and flags[owner][feature]
+
+
+def enabled(db, owner, mode):
+    paused = db.execute(
+        "SELECT value FROM metadata WHERE key='analysis_paused'"
+    ).fetchone()
+    if paused and json.loads(paused[0]):
+        return False
+    return permitted(db, owner, mode)
 
 
 class CancelledDjRequest(Exception):
@@ -440,6 +445,28 @@ class DjStore:
             )
         return True
 
+    def record_ready(self, owner, identity, *, now=None):
+        """First manifest read: store the delay the listener actually waited for."""
+        now = time.time() if now is None else now
+        with self.database.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute(
+                'SELECT document,state,created FROM dj_sessions WHERE id=? AND owner=?',
+                (identity, owner),
+            ).fetchone()
+            if row is None or row['state'] not in {'playing', 'paused', 'ready'}:
+                return None
+            document = json.loads(row['document'])
+            if 'ready_seconds' in document:
+                return None
+            seconds = round(max(0.0, now - row['created']), 3)
+            document.update(ready_seconds=seconds, ready_at=now)
+            db.execute(
+                'UPDATE dj_sessions SET document=? WHERE id=? AND owner=?',
+                (json.dumps(document), identity, owner),
+            )
+        return seconds
+
     def consumer(self, owner, identity):
         """Record only an authenticated, ACL-checked HLS reader; no client identity."""
         with self.database.connect() as db:
@@ -529,7 +556,9 @@ class DjStore:
             ).fetchone()
             if row is None:
                 raise LookupError('DJ session unavailable')
-            if row['mode'] != 'interactive' or not enabled(
+            # Playback commands follow the user's choice: pausing the library
+            # analysis must never interrupt a live set already rendered.
+            if row['mode'] != 'interactive' or not permitted(
                 db, owner, 'interactive'
             ):
                 raise PermissionError('Interactive DJ unavailable')

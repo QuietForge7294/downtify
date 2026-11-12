@@ -35,7 +35,13 @@ MOODS = {
     'fete': 'Upbeat dance party music with a strong beat',
     'melancolie': 'Melancholic emotional music with a sad reflective mood',
     'detente': 'Relaxed warm soothing music for unwinding',
+    'rap': 'Confident rap and hip-hop with a strong beat and spoken flow',
+    'rock': 'Energetic rock music with electric guitars and a driving beat',
+    'electro': 'Electronic dance music with a steady four on the floor beat',
 }
+
+# Genre themes narrow the catalog by its native tag before the mood ranking.
+GENRE_THEMES = ('rap', 'rock', 'electro')
 
 
 class Store:
@@ -104,6 +110,10 @@ class Store:
                 db.execute(
                     'ALTER TABLE listens ADD COLUMN sequence INTEGER NOT NULL DEFAULT 0'
                 )
+            # Track-level retry lookup for the reconciliation pass; bounded to analysis jobs.
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS jobs_analysis_track ON jobs(json_extract(payload,'$.track')) WHERE kind='analysis'"
+            )
             self._freeze_existing_preferences(db)
 
     @staticmethod

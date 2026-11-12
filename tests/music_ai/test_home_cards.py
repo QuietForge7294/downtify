@@ -1,7 +1,8 @@
 import json
+from datetime import datetime, timedelta
 
 from downtify.music_ai import playlists, routes
-from downtify.music_ai.playlists import period
+from downtify.music_ai.playlists import PARIS, period, stored_selections
 
 
 def test_four_daily_cards_have_stable_order_and_etag_without_full_catalog(
@@ -102,3 +103,42 @@ def test_opening_an_ungenerated_mood_is_a_cheap_pending_read(
     assert result.status_code == 200
     assert result.json()['state'] == 'preparing'
     assert result.json()['tracks'] == []
+
+
+def test_yesterday_mix_stays_visible_until_today_is_ready(client, monkeypatch):
+    http, database = client
+    monkeypatch.setattr(
+        routes,
+        'visible_rows',
+        lambda request, ids: (
+            [{'id': 'one', 'file': 'one.mp3'}] if 'one' in ids else []
+        ),
+    )
+    yesterday = period('daily', datetime.now(PARIS) - timedelta(days=1))
+    with database.connect() as db:
+        db.execute(
+            'INSERT INTO playlists VALUES (?,?,?,?,?,?)',
+            (1, 'daily', 'calme', yesterday, json.dumps(['one']), 10),
+        )
+    cards = http.get(
+        '/api/v1/music-ai/home', headers={'x-test-user': '1'}
+    ).json()['cards']
+    calme = next(item for item in cards if item['mood'] == 'calme')
+    assert calme['count'] == 1
+    assert calme['period'] == yesterday
+    assert calme['state'] == 'previous'
+
+
+def test_daily_selection_falls_back_to_the_previous_period(client):
+    _, database = client
+    yesterday = period('daily', datetime.now(PARIS) - timedelta(days=1))
+    with database.connect() as db:
+        db.execute(
+            'INSERT INTO playlists VALUES (?,?,?,?,?,?)',
+            (1, 'daily', 'calme', yesterday, json.dumps(['one']), 10),
+        )
+    chosen = stored_selections(database, 1)
+    assert [
+        (item['cadence'], item['mood'], item['period']) for item in chosen
+    ] == [('daily', 'calme', yesterday)]
+    assert chosen[0]['ids'] == ['one']

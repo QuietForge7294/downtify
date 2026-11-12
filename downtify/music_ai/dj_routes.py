@@ -506,7 +506,7 @@ def command(identity: str, payload: Command, request: Request):
         )
     except PermissionError:
         raise HTTPException(
-            409, 'Le module interactif est désactivé.'
+            409, 'Le DJ interactif est désactivé dans les réglages.'
         ) from None
     except RuntimeError:
         raise HTTPException(
@@ -599,6 +599,11 @@ def hls(identity: str, filename: str, request: Request):
             ) or 'URI=' in line:
                 raise HTTPException(503, 'Manifeste indisponible.')
         database().consumer(session['owner'], identity)
+        ready = database().record_ready(session['owner'], identity)
+        if ready is not None:
+            from .dj_readiness import record as record_readiness
+
+            record_readiness(base.store(), 'interactive', ready)
         return Response(
             content,
             media_type='application/vnd.apple.mpegurl',
@@ -607,6 +612,17 @@ def hls(identity: str, filename: str, request: Request):
     if target.stat().st_size > 1024**2:
         raise HTTPException(503, 'Segment indisponible.')
     return FileResponse(target, media_type='video/mp2t', headers=headers)
+
+
+@router.get('/readiness')
+def readiness(request: Request):
+    """Objective check: a warm DJ session should be playable within ten seconds."""
+    from . import routes as base
+
+    base.admin(request)
+    from .dj_readiness import summary
+
+    return summary(base.store())
 
 
 @router.get('/sessions')
