@@ -68,3 +68,15 @@ def test_analysed_pending_and_exhausted_tracks_are_skipped(tmp_path):
         db.execute("INSERT INTO analyses VALUES ('b','old','m',x'00000000',0)")
         db.execute('DELETE FROM catalog_pending')
     assert unanalysed(database, 'm') == ['b']
+    # An exhausted first row never hides the next one behind the limit.
+    with database.connect() as db:
+        db.execute("DELETE FROM analyses WHERE id='a'")
+        db.execute("DELETE FROM analyses WHERE id='b'")
+        db.execute(
+            "UPDATE jobs SET state='failed', attempts=3 WHERE id='job-c'"
+        )
+        db.execute(
+            "INSERT INTO jobs VALUES ('job-a','analysis',?, 'failed', 0, '', '', 3, 0, 0)",
+            ('{"track": "a"}',),
+        )
+    assert unanalysed(database, 'm', limit=1) == ['b']
