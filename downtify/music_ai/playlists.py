@@ -27,7 +27,7 @@ def themes(cadence):
     if cadence == 'daily':
         return [mood for mood in MOODS if mood not in GENRE_THEMES]
     if cadence == 'weekly':
-        return list(MOODS)
+        return list(MOODS) + list(GENRE_THEMES)
     raise ValueError('Invalid cadence')
 
 
@@ -55,7 +55,7 @@ def period(cadence, now=None):
 
 
 def generate(store, owner, cadence, mood, rows, model, *, now=None):
-    if mood not in MOODS:
+    if mood not in MOODS and mood not in GENRE_THEMES:
         raise ValueError('Unknown mood')
     features = store.effective(owner)
     if not features.get(cadence, False):
@@ -77,11 +77,14 @@ def generate(store, owner, cadence, mood, rows, model, *, now=None):
                 for tid in identities
                 if tid in allowed and tid in current
             ]
-        prompt = db.execute(
-            'SELECT vector FROM mood_vectors WHERE mood=? AND model=?',
-            (mood, model),
-        ).fetchone()
-        target = struct.unpack('<512f', prompt[0]) if prompt else None
+        if mood in GENRE_THEMES:
+            target = None
+        else:
+            prompt = db.execute(
+                'SELECT vector FROM mood_vectors WHERE mood=? AND model=?',
+                (mood, model),
+            ).fetchone()
+            target = struct.unpack('<512f', prompt[0]) if prompt else None
         import time
 
         proposed = Counter(
@@ -92,9 +95,6 @@ def generate(store, owner, cadence, mood, rows, model, *, now=None):
             )
             for identity in json.loads(row[0])
         )
-    # Mood playlists must not silently masquerade as AI when the model is absent.
-    if target is None:
-        raise RuntimeError('Mood analysis is not ready')
     candidates = genre_rows(mood, rows)
     target_size = DAILY_SIZE if cadence == 'daily' else WEEKLY_SIZE
     if mood in GENRES and len(candidates) < min(target_size, 8):
@@ -106,6 +106,18 @@ def generate(store, owner, cadence, mood, rows, model, *, now=None):
     analyzed_rows = [row for row in candidates if row['id'] in vectors]
     if not analyzed_rows or len(analyzed_rows) < min(target_size, len(candidates)):
         raise RuntimeError('The initial catalog analysis is still in progress')
+    if mood in GENRE_THEMES:
+        # A genre theme ranks against the centroid of its analysed tracks,
+        # never against a mood prompt (the bundled CLAP release pins only the
+        # six mood vectors, so there is no genre mood_vector to look up).
+        import numpy as np
+
+        target = np.mean(
+            [vectors[row['id']] for row in analyzed_rows], axis=0
+        )
+    elif target is None:
+        # Mood playlists must not silently masquerade as AI when the model is absent.
+        raise RuntimeError('Mood analysis is not ready')
     result = rank(
         analyzed_rows,
         vectors,
@@ -193,7 +205,7 @@ def _latest(store, owner, cadence, key):
         ).fetchall()
     latest = {}
     for mood, stored_period, ids, created in found:
-        if mood in MOODS and mood not in latest:
+        if (mood in MOODS or mood in GENRE_THEMES) and mood not in latest:
             latest[mood] = (stored_period, ids, created)
     return latest
 
