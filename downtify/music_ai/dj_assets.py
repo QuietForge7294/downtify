@@ -116,6 +116,25 @@ class Assets:
                 (identity, consumer, identity, owner),
             )
 
+    def discard(self, owner, identity):
+        with self.database.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute(
+                'SELECT id FROM dj_sessions WHERE id=? AND owner=?',
+                (identity, owner),
+            ).fetchone()
+            if row is None:
+                raise LookupError('DJ asset unavailable')
+            if db.execute(
+                'SELECT 1 FROM dj_asset_pins WHERE session=? AND expires>?',
+                (identity, time.time()),
+            ).fetchone():
+                raise RuntimeError('DJ asset in use')
+            db.execute(
+                "UPDATE dj_sessions SET state='deleting',lease_token='',lease_until=0,updated=? WHERE id=?",
+                (time.time(), identity),
+            )
+
     def pinned(self, identity, *, now=None):
         with self.database.connect() as db:
             return (

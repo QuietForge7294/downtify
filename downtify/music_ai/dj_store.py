@@ -648,11 +648,13 @@ class DjStore:
         with self.database.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             row = db.execute(
-                "SELECT id FROM dj_sessions WHERE id=? AND owner=? AND state!='deleted'",
+                "SELECT id,mode,state FROM dj_sessions WHERE id=? AND owner=? AND state!='deleted'",
                 (identity, owner),
             ).fetchone()
             if row is None:
                 raise LookupError('DJ session unavailable')
+            if row['mode'] == 'prepared' and row['state'] == 'ready':
+                return  # Transport stop does not discard accepted immutable audio.
             db.execute(
                 "UPDATE dj_sessions SET state='stopped',lease_token='',lease_until=0,updated=? WHERE id=?",
                 (time.time(), identity),

@@ -31,7 +31,7 @@ def ready(fixture, *, owner=1, data=b'accepted-audio', immutable=False):
     session = dj.create(
         owner,
         'prepared',
-        'rock' if False else 'energie',
+        'energie',
         list(sources),
         sources,
     )
@@ -156,3 +156,50 @@ def test_cache_rejects_symlinks_without_touching_their_target(
     with pytest.raises(AudioError, match='unsafe_cache_entry'):
         assets.used()
     assert original.read_bytes() == b'untouched'
+
+
+def test_stopping_an_accepted_prepared_set_keeps_it_replayable(fixture):
+    _, dj, assets = fixture
+    source = ready(fixture)
+    assets.pin(1, source['id'], 'one')
+    assets.pin(1, source['id'], 'two')
+    dj.stop(1, source['id'])
+    assets.release(1, source['id'], 'one')
+    assert dj.get(1, source['id'])['state'] == 'ready'
+    with pytest.raises(RuntimeError):
+        assets.discard(1, source['id'])
+    assets.release(1, source['id'], 'two')
+    assets.discard(1, source['id'])
+    assert dj.get(1, source['id'])['state'] == 'deleting'
+
+
+def test_completed_audio_can_resume_after_failed_commit_without_original(
+    fixture, monkeypatch
+):
+    import os
+
+    _, dj, assets = fixture
+    source = ready(fixture)
+    replace = os.replace
+
+    def interrupted(src, dst):
+        replace(src, dst)
+        raise OSError('interrupted after audio publication')
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, 'replace', interrupted)
+        with pytest.raises(OSError):
+            assets.copy(1, source['id'], 'Keep', 'commit-retry')
+    assert assets.expire(source['id'])
+    copied = assets.copy(1, source['id'], 'Keep', 'commit-retry')
+    assert copied['state'] == 'ready'
+    assert assets.media(copied).read_bytes() == b'accepted-audio'
+
+
+def test_copies_keep_the_current_permission_gate_on_retry(fixture):
+    database, _, assets = fixture
+    source = ready(fixture)
+    assets.copy(1, source['id'], 'Keep', 'permission-retry')
+    database.set_preferences(1, {'dj_prepared': False})
+    with pytest.raises(PermissionError):
+        assets.copy(1, source['id'], 'Keep', 'permission-retry')

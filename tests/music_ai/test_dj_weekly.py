@@ -33,7 +33,10 @@ def setup(tmp_path, monkeypatch):
             'source_version': [],
         }
     monkeypatch.setattr(compute_budget, 'pressure_high', lambda: False)
-    database.set_metadata('dj', {'prepared_ready': True, 'seen': time.time()})
+    database.set_metadata(
+        'dj',
+        {'prepared_ready': True, 'weekly_protocol': 1, 'seen': time.time()},
+    )
     return database, DjStore(database), sources, music
 
 
@@ -400,3 +403,38 @@ def test_weekly_publish_rechecks_permissions_and_priority_in_its_transaction(
         {'asset_workspace': job['render_workspace']},
     )
     assert dj.get(1, pending['id'])['state'] != 'ready'
+
+
+def test_legacy_worker_cannot_accept_new_weekly_jobs(setup):
+    database, _, _, _ = setup
+    database.set_metadata('dj', {'prepared_ready': True, 'seen': time.time()})
+
+    def forbidden(*args):
+        pytest.fail('Legacy worker caused catalog access')
+
+    assert enqueue_due(database, forbidden, forbidden, forbidden) == 0
+
+
+def test_deleted_automatic_set_is_not_regenerated_each_sweep(setup):
+    database, dj, sources, _ = setup
+    seed(database, 1, list(sources))
+
+    def rows(owner):
+        return [{'id': tid} for tid in sources]
+
+    assert (
+        enqueue_due(
+            database, lambda owner: True, rows, lambda owner, ids: sources
+        )
+        == 1
+    )
+    with database.connect() as db:
+        identity = db.execute('SELECT id FROM dj_sessions').fetchone()[0]
+    dj.discard(1, identity)
+    dj.deleted(identity)
+    assert (
+        enqueue_due(
+            database, lambda owner: True, rows, lambda owner, ids: sources
+        )
+        == 0
+    )
