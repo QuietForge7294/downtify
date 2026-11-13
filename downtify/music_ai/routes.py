@@ -10,6 +10,7 @@ import time
 from functools import lru_cache, wraps
 from pathlib import Path
 from typing import Literal
+from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -317,6 +318,7 @@ def capabilities(request: Request):
     return {
         'version': 1,
         'home_cards': True,
+        'playlist_refresh': True,
         'dj_request_cancel': True,
         'dj_light_status': True,
         'dj_navigation': True,
@@ -404,6 +406,11 @@ async def recommendations(
         rows,
         vectors,
         seed=seed or None,
+        rotation=''
+        if seed
+        else (
+            f'{uid}:{period("daily")}:{store().metadata(f"selection_revision:{uid}", 0)}'
+        ),
         history=store().history(uid),
         favorites=await asyncio.to_thread(favorite_ids, request, rows),
         limit=limit,
@@ -411,6 +418,21 @@ async def recommendations(
     result = await asyncio.to_thread(current_sources, result)
     require(request, 'similarity' if seed else 'personalization')
     return {'source': 'local', 'tracks': [public(row) for row in result]}
+
+
+class PlaylistRefresh(BaseModel):
+    request_id: UUID
+
+
+@router.post('/playlists/refresh')
+def refresh_playlists(request: Request, payload: PlaylistRefresh):
+    from .playlists import refresh
+
+    uid = owner(request)
+    try:
+        return refresh(store(), uid, str(payload.request_id))
+    except PermissionError as exc:
+        raise HTTPException(403, 'Feature disabled') from exc
 
 
 @router.get('/playlists')

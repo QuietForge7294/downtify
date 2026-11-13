@@ -1,0 +1,28 @@
+{
+  "cpu_affinity": [
+    2
+  ],
+  "memory_limit_bytes": 2147483648,
+  "max_aggregate_rss_bytes": 740888576,
+  "observed_cpu_seconds": 132.03,
+  "elapsed_seconds": 176.709,
+  "exit_code": 0,
+  "violation": null,
+  "source_sha256": {
+    "dj_worker.py": "531af4eec9f30121c0fd011dec8d0fd680edf7ef03609fc5456e925ba4d1b7c1",
+    "dj_analysis.py": "4a058409b491e7a88a4396e5b9c4ede9e29c220c7e5e58d729c1fcc948972cfb",
+    "analysis_process.py": "1627436244f666ba579d29e79d9710c86b14884d9f2ff4560157a50c6212f86b",
+    "dj_audio.py": "e1d43f6fc080364bafaebe6cfbde0d7342de5914585d654f9975391f335dc8ed",
+    "dj_assets.py": "c23de32d876c575618fdb572926ed8294bfb3e664344cd5ce535c1bb0d0e132f",
+    "dj_routes.py": "360286c6c0013d1ed29a17d8fa74c2724609c05e0eb3f05c973343ea5036536e",
+    "dj_weekly.py": "27facb15cb6735b26f9266e01705a4e000c32f33ad3343e4b2036c6479c75189",
+    "dj_store.py": "e993352d270d463a49aa3a083f307531e3ec0a47260425cbc5798a34f40c090f",
+    "dj_prepared_deck.py": "de42ec4da66fb54256986be5bd942c13b4402cba8e66fe218ae549faeb8bd125"
+  },
+  "tests_passed": 3678,
+  "tests_skipped": 0,
+  "subtests_passed": 10,
+  "pytest_seconds": 175.66,
+  "real_models": true,
+  "scope": "Synthetic local fixtures; not a deployed image or physical playback benchmark"
+}

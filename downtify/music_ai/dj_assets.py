@@ -188,6 +188,54 @@ class Assets:
             shutil.rmtree(directory)
         return True
 
+    def prune_orphans(self, checkpoint=lambda: None, *, now=None):
+        """Caller holds the shared compute lease; only stale private attempt dirs."""
+        now = time.time() if now is None else now
+        with self.database.connect() as db:
+            rows = db.execute(
+                "SELECT id,document FROM dj_sessions WHERE state NOT IN ('deleted','expired')"
+            ).fetchall()
+        referenced = set()
+        for row in rows:
+            document = json.loads(row['document'])
+            referenced.add(row['id'])
+            referenced.update(
+                document.get(key)
+                for key in ('asset_workspace', 'render_workspace')
+            )
+        removed = 0
+        for entry in self.root.iterdir():
+            checkpoint()
+            if (
+                entry.name in referenced
+                or re.fullmatch('[a-f0-9]{32}', entry.name) is None
+            ):
+                continue
+            directory = self.directory(entry.name)
+            try:
+                if (
+                    not directory.is_dir()
+                    or now - directory.stat().st_mtime < 3600
+                ):
+                    continue
+            except FileNotFoundError:
+                continue
+            checkpoint()
+            # Re-read under the writer transaction before removing a stale attempt.
+            # Accepted publication, reader pins, and explicit copy creation use this lock.
+            with self.database.connect() as db:
+                db.execute('BEGIN IMMEDIATE')
+                if db.execute(
+                    "SELECT 1 FROM dj_sessions WHERE state NOT IN ('deleted','expired') AND (id=? OR json_extract(document,'$.asset_workspace')=? OR json_extract(document,'$.render_workspace')=?) LIMIT 1",
+                    (directory.name, directory.name, directory.name),
+                ).fetchone():
+                    continue
+                shutil.rmtree(directory)
+            removed += 1
+            if removed >= 32:
+                break
+        return removed
+
     def reserve(self, requested, checkpoint=lambda: None):
         if requested < 0 or requested + self.margin > self.budget:
             raise AudioError('dj_cache_full')
@@ -199,6 +247,9 @@ class Assets:
                 >= requested + self.margin + self.min_free
             )
 
+        if enough():
+            return
+        self.prune_orphans(checkpoint)
         if enough():
             return
         with self.database.connect() as db:

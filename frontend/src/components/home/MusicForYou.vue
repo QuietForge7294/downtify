@@ -49,10 +49,22 @@
       <UiButton :disabled="indexLoading" icon="refresh" @click="loadIndex"
         >Actualiser</UiButton
       >
+      <UiButton
+        v-if="
+          musicAI.capabilities.value?.playlist_refresh &&
+          (enabled('daily') || enabled('weekly'))
+        "
+        :disabled="busy || indexLoading"
+        @click="renew"
+        >Renouveler mes mixes</UiButton
+      >
       <UiButton v-if="tracks.length" :disabled="busy" @click="clearSelection"
         >← Tous mes mixes</UiButton
       >
     </div>
+    <p v-if="renewalMessage" role="status" class="text-muted">
+      {{ renewalMessage }}
+    </p>
     <p
       v-if="indexLoading && !playlists.length"
       role="status"
@@ -233,7 +245,8 @@ const busy = ref(false),
   indexLoading = ref(false),
   failure = ref(''),
   indexFailure = ref(''),
-  saved = ref('')
+  saved = ref(''),
+  renewalMessage = ref('')
 let serial = 0,
   indexSerial = 0,
   disposed = false,
@@ -328,6 +341,17 @@ function chooseCadence(value) {
   cadence.value = value
   clearSelection()
 }
+const renew = () =>
+  run(
+    () => musicAI.renewPlaylists(crypto.randomUUID()),
+    () => {
+      ++indexSerial
+      playlists.value = []
+      clearSelection()
+      renewalMessage.value =
+        'Renouvellement demandé. Vos nouveaux mixes se préparent ; actualisez dans un instant. Les copies enregistrées restent à vous.'
+    }
+  )
 const open = (card) =>
   run(
     () => musicAI.playlist(card.cadence, card.mood),
@@ -415,6 +439,7 @@ watch(
     tracks.value = []
     playlists.value = []
     saved.value = ''
+    renewalMessage.value = ''
     failure.value = ''
     indexFailure.value = ''
     busy.value = false

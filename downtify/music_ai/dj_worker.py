@@ -97,6 +97,7 @@ def engine_identity():
         'dj_live_plan',
         'dj_preparation',
         'dj_prepared_deck',
+        'dj_pcm_stream',
         'dj_hls',
         'dj_validation',
     ))
