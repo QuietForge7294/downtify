@@ -11,12 +11,10 @@ import time
 from .compute_budget import acquire
 from .dj_audio import AudioIO
 from .dj_worker import DjWorker
+from .rhythm_queue import active
 from .sqlite_busy import is_busy
 from .store import DEFAULTS
 from .worker import Deferred, signature, source_path
-
-
-from .rhythm_queue import active
 
 
 class RhythmWorker:
@@ -36,6 +34,9 @@ class RhythmWorker:
         self.ticket = None
         self.job = None
         self.checked = 0.0
+
+    def close(self):
+        self.runner.close()
 
     def checkpoint(self, *, force=False):
         if self.ticket is None or not self.ticket.renew():
@@ -115,7 +116,7 @@ class RhythmWorker:
             {
                 'model': self.runner.analysis,
                 'seen': time.time(),
-                'ready': active(database),
+                'enabled': active(database),
             },
         )
         if (
@@ -123,6 +124,7 @@ class RhythmWorker:
             or database.metadata('analysis_paused', False)
             or database.metadata('native_busy', False)
         ):
+            self.close()
             return False
         self.ticket = acquire(database, 'analysis')
         if self.ticket is None:

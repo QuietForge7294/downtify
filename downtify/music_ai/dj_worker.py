@@ -7,7 +7,6 @@ import hashlib
 import importlib.metadata
 import inspect
 import json
-import math
 import shutil
 import sqlite3
 import sys
@@ -53,6 +52,9 @@ def analysis_identity():
     # Model pins and audio-analysis changes still invalidate derived profiles.
     content = json.dumps(PINS, sort_keys=True).encode()
     content += Path(__file__).with_name('dj_evidence.py').read_bytes()
+    from .dj_analysis import AnalysisEngine
+
+    content += inspect.getsource(AnalysisEngine).encode()
     for function in (
         validate_models,
         analyze_child,
@@ -82,6 +84,8 @@ def analysis_identity():
 def engine_identity():
     return 'dj:' + identity((
         'dj_plan',
+        'dj_analysis',
+        'analysis_process',
         'dj_evidence',
         'dj_mix',
         'dj_audio',
@@ -108,75 +112,10 @@ def validate_models(models):
 
 
 def analyze_child(options):
-    import torch
-    from beat_this.inference import Audio2Beats
+    from .dj_analysis import AnalysisEngine
 
-    from .dj_evidence import profile_from_signal
-
-    validate_models(options.models)
-    torch.set_num_threads(1)
-    torch.set_num_interop_threads(1)
     payload = json.loads(sys.stdin.buffer.read(16385))
-    io = AudioIO(
-        options.cache,
-        options.root,
-        budget=options.cache_bytes,
-        min_free=options.min_free,
-        workspace=options.workspace,
-    )
-    if payload.get('snapshot'):
-        io.allow_snapshot(payload['path'], payload['source_version'])
-    chosen = ['small0']
-
-    def positions(values, duration):
-        if any(
-            not math.isfinite(value)
-            or value < -0.05
-            or value > duration + 0.05
-            for value in values
-        ):
-            raise AudioError('invalid_beat_positions')
-        # A model's final spectrogram frame can coincide with the audio end.
-        return [float(value) for value in values if 0 <= value < duration]
-
-    def tracker(signal, rate):
-        with torch.inference_mode():
-            small = Audio2Beats(
-                str(options.models / 'small0.ckpt'), device='cpu', dbn=False
-            )
-            beats, bars = small(signal, rate)
-            beats, bars = (
-                positions(beats, len(signal) / rate),
-                positions(bars, len(signal) / rate),
-            )
-            evidence = profile_from_signal(
-                payload['id'], signal, rate, beats, bars
-            )
-            if 0.2 <= evidence.confidence < 0.75:
-                large = Audio2Beats(
-                    str(options.models / 'final0.ckpt'),
-                    device='cpu',
-                    dbn=False,
-                )
-                other_beats, other_bars = large(signal, rate)
-                other_beats = positions(other_beats, len(signal) / rate)
-                other_bars = positions(other_bars, len(signal) / rate)
-                other = profile_from_signal(
-                    payload['id'], signal, rate, other_beats, other_bars
-                )
-                if other.confidence > evidence.confidence + 0.05:
-                    beats, bars, chosen[0] = other_beats, other_bars, 'final0'
-            return beats, bars
-
-    result = io.analyze(
-        payload['id'],
-        payload['path'],
-        tracker,
-        lambda: None,
-        artist=payload.get('artist', ''),
-        expected=payload['source_version'],
-    )
-    result['beat_model'] = chosen[0]
+    result = AnalysisEngine(options).analyze(payload)
     print(json.dumps(result))
 
 
@@ -204,6 +143,11 @@ class DjWorker:
         self.checked = self.renewed = 0.0
         self.models_validated = False
         self.compute_ticket = None
+        self._analysis_process = None
+
+    def close(self):
+        if self._analysis_process is not None:
+            self._analysis_process.close()
 
     def capabilities(self):
         from .dj_validation import runtime_identity, saved_proof, validated
@@ -290,40 +234,40 @@ class DjWorker:
         )
         if cached:
             return cached
-        arguments = [
-            sys.executable,
-            '-m',
-            'downtify.music_ai.dj_worker',
-            'analyze',
-            '--models',
-            str(self.models),
-            '--cache',
-            str(self.cache),
-            '--workspace',
-            io.workspace.name,
-            '--cache-bytes',
-            str(self.cache_bytes),
-            '--min-free',
-            str(self.min_free),
-        ]
-        for root in self.roots:
-            arguments += ['--root', str(root)]
-        payload = {
-            'id': track,
-            'path': str(original),
-            'artist': source.get('artist', ''),
-            'source_version': audio['source_version'],
-            'snapshot': 'snapshot' in source,
-        }
-        output, _ = run_audio(
-            arguments,
+        from .analysis_process import AnalysisProcess
+
+        if self._analysis_process is None:
+            arguments = [
+                sys.executable,
+                '-m',
+                'downtify.music_ai.dj_worker',
+                'analyze-stream',
+                '--models',
+                str(self.models),
+                '--cache',
+                str(self.cache),
+                '--cache-bytes',
+                str(self.cache_bytes),
+                '--min-free',
+                str(self.min_free),
+            ]
+            for root in self.roots:
+                arguments += ['--root', str(root)]
+            self._analysis_process = AnalysisProcess(
+                arguments, cwd=Path(__file__).resolve().parents[2]
+            )
+        result = self._analysis_process.analyze(
+            {
+                'id': track,
+                'path': str(original),
+                'artist': source.get('artist', ''),
+                'source_version': audio['source_version'],
+                'snapshot': 'snapshot' in source,
+                'workspace': io.workspace.name,
+                'analysis_model': self.analysis,
+            },
             checkpoint,
-            timeout=900,
-            input_data=json.dumps(payload).encode(),
-            max_output=2 * 1024**2,
-            cwd=Path(__file__).resolve().parents[2],
         )
-        result = json.loads(output)
         checkpoint()
         io.original(audio['path'], audio['source_version'])
         result['source_version'] = source['source_version']
@@ -530,6 +474,11 @@ class DjWorker:
             self.dj.deleted(identity)
         job = self.dj.claim()
         if job is None:
+            flags = self.database.preferences(-1)
+            if not any(
+                flags[key] for key in ('dj_prepared', 'dj_interactive')
+            ) or self.database.metadata('analysis_paused', False):
+                self.close()
             return False
         self.job, self.stage = job, 'preparing'
         self.checked = self.renewed = 0
@@ -661,7 +610,9 @@ class DjWorker:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=('work', 'analyze', 'preanalyze'))
+    parser.add_argument(
+        'action', choices=('work', 'analyze', 'analyze-stream', 'preanalyze')
+    )
     parser.add_argument('--database', type=Path)
     parser.add_argument('--cache', type=Path)
     parser.add_argument('--workspace')
@@ -671,6 +622,11 @@ def main():
     parser.add_argument('--min-free', type=int, default=2 * 1024**3)
     parser.add_argument('--once', action='store_true')
     options = parser.parse_args()
+    if options.action == 'analyze-stream':
+        from .dj_analysis import serve
+
+        serve(options)
+        return
     if options.action == 'analyze':
         analyze_child(options)
         return
@@ -691,12 +647,15 @@ def main():
         ),
         seconds=30,
     )
-    while True:
-        worked = worker.run_cycle()
-        if options.once:
-            break
-        if not worked:
-            time.sleep(3)
+    try:
+        while True:
+            worked = worker.run_cycle()
+            if options.once:
+                break
+            if not worked:
+                time.sleep(3)
+    finally:
+        worker.close()
 
 
 if __name__ == '__main__':

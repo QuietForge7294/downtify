@@ -20,4 +20,13 @@ La ligne de commande est `python -m downtify.music_ai.dj_worker preanalyze` avec
 
 ## État de validation
 
-La suite musique/DJ comporte 277 tests réussis et deux essais de vrais modèles exclus dans l’environnement de développement. Douze tests audio utilisent réellement FFmpeg. Les scénarios de reprise, priorité DJ/native, catalogue modifié et dimanche avec changement d’heure sont automatisés. Le maintien du modèle entre travaux est traité séparément ; les mesures de couverture réelle, CPU/RAM/IO, premier son, heure continue et appareil restent à effectuer sur la candidate isolée avant bascule.
+La suite complète du backend comporte 3 606 tests réussis et deux essais de vrais modèles exclus dans l’environnement de développement. Douze tests audio utilisent réellement FFmpeg. Les scénarios de reprise, priorité DJ/native, catalogue modifié et dimanche avec changement d’heure sont automatisés. Les mesures de couverture réelle, CPU/RAM/IO, premier son, heure continue et appareil restent à effectuer sur la candidate isolée avant bascule.
+
+
+## Modèle résident et annulation
+
+L’inférence utilise un processus résident sérialisé. Les instances small0 et final0 sont construites à la demande puis conservées entre les titres ; aucune nouvelle famille de modèle ni aucun téléchargement de poids n’est ajouté. Les échanges JSON ont un identifiant de requête, une borne de 16 Kio en entrée, 2 Mio en sortie et un délai maximal. Les réponses incompatibles, périmées ou tardives ne sont pas adoptées. Une annulation ferme le groupe du processus et de ses décodeurs ; le prochain travail utilise un processus neuf. La désactivation libère le modèle résident. Les résultats de profils déjà valides restent réutilisés sans inférence.
+
+Les temps de beats bruts et les points candidats issus des mesures sont conservés avec le profil. Un point candidat n’est pas une preuve de phrase musicale ou de transition qualifiée. Cette extension change la révision de l’analyse rythmique ; les profils incomplets de l’ancienne révision sont complétés une fois. Les vecteurs DCLAP restent inchangés et le contrôle hebdomadaire ne relance pas les réussites de la révision courante.
+
+Le code d’inférence de la version utilisée, beat-this 1.1.0, a été vérifié dans son wheel officiel (SHA256 `3f2b2d1e027c6dac380bf80c71555e3c28a4036a7f1af20129a945915a72a645`). Référence du projet : https://github.com/CPJKU/beat_this. Les tests de protocole et les doublures de modèles vérifient la réutilisation, la sérialisation et l’annulation ; ils ne démontrent pas la mémoire réelle ni le débit des poids sur le serveur. Les deux tests d’intégration des vrais modèles restent à exécuter dans l’image isolée.

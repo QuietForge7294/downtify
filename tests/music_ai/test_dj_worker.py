@@ -38,7 +38,8 @@ def prepared(tmp_path):
         for index, path in enumerate(paths)
     }
     worker = dj_worker.DjWorker(database, Path('/models'), [music], min_free=0)
-    return dj, worker, sources, paths
+    yield dj, worker, sources, paths
+    worker.close()
 
 
 def test_real_prepared_worker_reuses_unchanged_profiles_without_new_model_processes(
@@ -47,20 +48,22 @@ def test_real_prepared_worker_reuses_unchanged_profiles_without_new_model_proces
     dj, worker, sources, paths = prepared
     hashes = [hashlib.sha256(path.read_bytes()).hexdigest() for path in paths]
     launched = []
-    real = dj_worker.run_audio
+    from downtify.music_ai.analysis_process import AnalysisProcess
 
-    def observe(arguments, *args, **kwargs):
-        launched.append(arguments)
-        return real(arguments, *args, **kwargs)
+    real = AnalysisProcess._start
 
-    monkeypatch.setattr(dj_worker, 'run_audio', observe)
+    def observe(process):
+        real(process)
+        launched.append(process._process.pid)
+
+    monkeypatch.setattr(AnalysisProcess, '_start', observe)
     first = dj.create(1, 'prepared', 'fete', list(sources), sources)
     assert worker.step()
     ready = dj.get(1, first['id'])
     assert ready['state'] == 'ready'
     assert ready['duration'] > 8
     assert (worker.cache / first['id'] / 'set.m4a').is_file()
-    assert len(launched) == 2
+    assert len(launched) == 1
     launched.clear()
     second = dj.create(1, 'prepared', 'fete', list(sources), sources)
     assert worker.step()
