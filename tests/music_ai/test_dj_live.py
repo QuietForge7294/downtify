@@ -242,3 +242,8 @@ def test_continuous_hls_renews_without_restarting_encoder_and_bounds_history(
         path.name: hashlib.sha256(path.read_bytes()).hexdigest()
         for path in music.iterdir()
     }
+
+
+def test_repeated_track_occurrences_do_not_share_a_consumed_pcm_cursor():
+    row = {'id': 'same', 'cue': 0, 'speed': 1, 'start': 0}
+    assert LiveRenderer.key(row) != LiveRenderer.key({**row, 'start': 60})
