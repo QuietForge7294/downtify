@@ -1,0 +1,43 @@
+{
+  "scope": "synthetic model integration; not library or acoustic latency qualification",
+  "tests_passed": 2,
+  "tests_skipped": 0,
+  "logical_cpu_count": 1,
+  "max_observed_aggregate_rss_bytes": 593842176,
+  "elapsed_seconds": 7.561,
+  "watchdog_limit_bytes": 2147483648,
+  "sampling_interval_seconds": 0.1,
+  "memory_interpretation": "sampled RSS sum of test process tree; shared pages may be counted twice; not cgroup peak",
+  "versions": {
+    "torch": "2.15.0+cpu",
+    "torchaudio": "2.11.1+cpu",
+    "numpy": "2.5.4",
+    "scipy": "1.18.1",
+    "soxr": "1.1.0",
+    "beat-this": "1.1.0",
+    "einops": "0.8.2",
+    "rotary-embedding-torch": "0.9.1"
+  },
+  "checkpoint_receipts": [
+    {
+      "name": "small0",
+      "sha256": "6074be2c4d490c5f6101fcc374a1ec72ae93456e23bb6019783b849f5dc7d47b",
+      "bytes": 8451101,
+      "verified": true,
+      "source": "https://cloud.cp.jku.at/public.php/dav/files/7ik4RrBKTS273gp/small0.ckpt"
+    },
+    {
+      "name": "final0",
+      "sha256": "8c328b45f59d8dd3dff219253ff6a8d6482be57d0133a29140e2febbf8eb8331",
+      "bytes": 81058141,
+      "verified": true,
+      "source": "https://cloud.cp.jku.at/public.php/dav/files/7ik4RrBKTS273gp/final0.ckpt"
+    }
+  ],
+  "source_sha256": {
+    "dj_worker.py": "09eb0ae973a1c9033bd4154b5c128666824aaa5bfcbdea05f362619b08bf4543",
+    "dj_analysis.py": "4a058409b491e7a88a4396e5b9c4ede9e29c220c7e5e58d729c1fcc948972cfb",
+    "analysis_process.py": "aafe2935dfd3744fa573b4e287e03da7f334e950610b9d7fe5ee1b240f6f3d2b",
+    "dj_audio.py": "35ca2a1a44dad80c2c43819440ef48ffc6b3208c5fd3b04e9056892ce7e91b6b"
+  }
+}

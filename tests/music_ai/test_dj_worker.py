@@ -1,4 +1,5 @@
 import hashlib
+import os
 import shutil
 import threading
 from pathlib import Path
@@ -11,8 +12,10 @@ from downtify.music_ai import dj_worker
 from downtify.music_ai.dj_store import DjStore
 from downtify.music_ai.worker import signature
 
+MODELS = Path(os.environ.get('DOWNTIFY_TEST_DJ_MODELS', '/models'))
+
 pytestmark = pytest.mark.skipif(
-    not (shutil.which('ffmpeg') and Path('/models/small0.ckpt').is_file()),
+    not (shutil.which('ffmpeg') and (MODELS / 'small0.ckpt').is_file()),
     reason='Real model integration runs in the isolated DJ image',
 )
 
@@ -37,7 +40,7 @@ def prepared(tmp_path):
         }
         for index, path in enumerate(paths)
     }
-    worker = dj_worker.DjWorker(database, Path('/models'), [music], min_free=0)
+    worker = dj_worker.DjWorker(database, MODELS, [music], min_free=0)
     yield dj, worker, sources, paths
     worker.close()
 
