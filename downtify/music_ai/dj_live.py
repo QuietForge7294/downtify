@@ -28,15 +28,16 @@ class LiveRenderer:
     ):
         self.worker, self.io, self.results = worker, io, results
         self.clock, self.sleep = clock, sleep
+        initial_count = len(results)
         self.plan = LivePlan(
             [Profile(**value['profile']) for value in results.values()],
             worker.job['theme'],
-            order=worker.job['ids'][:4]
+            order=worker.job['ids'][:initial_count]
             if worker.job.get('queue_order') or worker.job.get('seed_id')
             else None,
         )
         self.sources = {}
-        self.pending_ids = list(worker.job['ids'][4:])
+        self.pending_ids = list(worker.job['ids'][initial_count:])
         if worker.job.get('continuous') and not worker.job.get('queue_order'):
             self.plan.rows = self.plan.rows[:6]
             self.plan.rows[-1]['transition'] = None

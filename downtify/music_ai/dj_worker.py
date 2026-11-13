@@ -567,7 +567,7 @@ class DjWorker:
                     )
                 ):
                     raise AudioError('interactive_not_validated')
-                first = list(dict.fromkeys(job['ids'][:4]))
+                first = list(dict.fromkeys(job['ids'][:2]))
                 results = {
                     track: self.prepare_deck(track, io) for track in first
                 }

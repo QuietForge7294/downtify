@@ -379,3 +379,18 @@ def test_late_decoded_result_is_discarded_after_invalidation(
         assert not paths[0].exists()
     finally:
         release.set()
+
+
+def test_two_initial_profiles_keep_the_rest_of_the_queue_pending(live):
+    original, worker, io = live
+    initial = {key: original.results[key] for key in worker.job['ids'][:2]}
+    renderer = dj_live.LiveRenderer(worker, io, initial)
+    try:
+        assert [row['id'] for row in renderer.plan.rows] == ['0', '1']
+        assert renderer.pending_ids == ['2', '3']
+        assert len(renderer.window()) == 2
+        assert set(renderer.results) == {'0', '1'}
+        assert worker.job['ids'] == ['0', '1', '2', '3']
+    finally:
+        renderer.preparation.close()
+        renderer.preparation.poll()
