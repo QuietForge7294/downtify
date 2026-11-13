@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 
 from .dj_audio import AudioError, AudioIO, run_audio
+from .dj_background import BackgroundDeferred
 from .dj_plan import Profile, order_tracks, timeline
 from .dj_store import DjStore
 from .sqlite_busy import is_busy, retry_busy
@@ -90,6 +91,7 @@ def engine_identity():
         'dj_mix',
         'dj_audio',
         'dj_store',
+        'dj_background',
         'dj_worker',
         'dj_live',
         'dj_live_plan',
@@ -193,10 +195,23 @@ class DjWorker:
 
     def _checkpoint(self):
         if self.compute_ticket is not None and not self.compute_ticket.renew():
+            if self.job.get('background'):
+                raise BackgroundDeferred('background_waiting')
             raise PermissionError('compute_slot_lost')
         clock = time.monotonic()
         if clock - self.checked < 0.25:
             return
+        if self.job.get('background'):
+            from .compute_budget import pressure_high
+            from .dj_background import allowed, blocked
+
+            with self.database.connect() as db:
+                if not allowed(
+                    db, self.job['owner'], self.job, now=time.time()
+                ):
+                    raise PermissionError('weekly_invalidated')
+                if blocked(db) or pressure_high():
+                    raise BackgroundDeferred('background_waiting')
         if (
             self.job.get('trial')
             and not self.database.effective(self.job['owner'])['dj_trial']
@@ -442,18 +457,61 @@ class DjWorker:
                 'render_speed': rows[-1]['end'] / max(0.001, render_time),
                 'engine': self.engine,
                 'output_bytes': target.stat().st_size,
+                **(
+                    {'asset_workspace': io.workspace.name}
+                    if self.job.get('background')
+                    else {}
+                ),
             },
         )
         if not published:
             target.unlink(missing_ok=True)
             raise PermissionError('dj_session_stopped')
+        self._committed_workspace = io.workspace
         # Prepared readiness is the render itself: the client can play the file.
         from .dj_readiness import record as record_readiness
 
         record_readiness(self.dj.database, 'prepared', elapsed)
 
+    def discard_workspace(self, io):
+        if io is None or io.workspace == getattr(
+            self, '_committed_workspace', None
+        ):
+            return
+        directory = io.workspace
+        if (
+            directory != io.cache
+            and not directory.is_symlink()
+            and directory.resolve().is_relative_to(io.cache)
+            and directory.exists()
+        ):
+            shutil.rmtree(directory)
+
+    def defer_background(self, io):
+        try:
+            retry_busy(
+                lambda: self.dj.defer_background(
+                    self.job['id'], self.job['lease_token']
+                ),
+                seconds=8,
+            )
+        finally:
+            try:
+                from .compute_budget import pressure_high
+
+                if (
+                    self.database.metadata('native_busy', False)
+                    or self.database.metadata('analysis_paused', False)
+                    or pressure_high()
+                ):
+                    self.close()
+            finally:
+                self.discard_workspace(io)
+
     def step(self):
         self.capabilities()
+        if self.cache.is_symlink():
+            raise AudioError('unsafe_cache_entry')
         # The single renderer performs deletion only between jobs, after any
         # cancelled decoder/encoder has been reaped. No original path is used.
         for identity in self.dj.deletion_requests():
@@ -461,7 +519,14 @@ class DjWorker:
                 value not in '0123456789abcdef' for value in identity
             ):
                 continue
-            directory = self.cache / identity
+            name = self.dj.workspace(identity)
+            if (
+                not isinstance(name, str)
+                or len(name) != 32
+                or any(value not in '0123456789abcdef' for value in name)
+            ):
+                continue
+            directory = self.cache / name
             if directory.is_symlink() or (
                 directory.exists()
                 and not directory.resolve().is_relative_to(
@@ -481,6 +546,7 @@ class DjWorker:
                 self.close()
             return False
         self.job, self.stage = job, 'preparing'
+        self._committed_workspace = None
         self.checked = self.renewed = 0
         io = None
         ticket = None
@@ -489,7 +555,10 @@ class DjWorker:
 
             while ticket is None:
                 self.checkpoint()
-                ticket = acquire(self.database, 'dj')
+                ticket = acquire(
+                    self.database,
+                    'dj-background' if job.get('background') else 'dj',
+                )
                 if ticket is None:
                     time.sleep(0.25)
             self.compute_ticket = ticket
@@ -498,7 +567,9 @@ class DjWorker:
                 self.roots,
                 budget=self.cache_bytes,
                 min_free=self.min_free,
-                workspace=job['id'],
+                workspace=job.get('render_workspace', job['id'])
+                if job.get('background')
+                else job['id'],
             )
             if job['mode'] == 'prepared':
                 self.prepared(io)
@@ -534,6 +605,8 @@ class DjWorker:
                 ):
                     raise AudioError('validation_set_too_short')
                 renderer.render()
+        except BackgroundDeferred:
+            self.defer_background(io)
         except (
             OSError,
             ValueError,
@@ -545,6 +618,18 @@ class DjWorker:
                 error
             ):
                 raise
+            if (
+                job.get('background')
+                and isinstance(error, PermissionError)
+                and str(error)
+                in {
+                    'weekly_invalidated',
+                    'dj_session_stopped',
+                    'compute_slot_lost',
+                }
+            ):
+                self.defer_background(io)
+                return True
             code = (
                 str(error)
                 if isinstance(error, AudioError)
@@ -565,15 +650,8 @@ class DjWorker:
                 if not is_busy(pending):
                     raise
                 # The lease expires without accepting any late output.
-            # Only this opaque session's private workspace can be removed.
-            if io is not None:
-                directory = io.workspace
-                if (
-                    directory != io.cache
-                    and not directory.is_symlink()
-                    and directory.resolve().is_relative_to(io.cache)
-                ):
-                    shutil.rmtree(directory)
+            # Only this attempt's private workspace can be removed.
+            self.discard_workspace(io)
         finally:
             if io is not None:
                 io.release_snapshots()

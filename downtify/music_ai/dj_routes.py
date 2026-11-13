@@ -753,7 +753,10 @@ def media(identity: str, request: Request):
     if session['mode'] != 'prepared' or session['state'] != 'ready':
         raise HTTPException(409, 'Le set n’est pas prêt.')
     cache = base.store().path.resolve().parent / 'dj'
-    workspace = cache / identity
+    name = session.get('asset_workspace', identity)
+    if not isinstance(name, str) or re.fullmatch('[a-f0-9]{32}', name) is None:
+        raise HTTPException(404, 'Le fichier de ce set n’est plus disponible.')
+    workspace = cache / name
     target = workspace / 'set.m4a'
     if (
         cache.is_symlink()
