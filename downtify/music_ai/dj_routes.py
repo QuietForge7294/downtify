@@ -612,6 +612,7 @@ def hls(identity: str, filename: str, request: Request):
                 and not re.fullmatch(r'segment-[0-9]{8}\.ts', line)
             ) or 'URI=' in line:
                 raise HTTPException(503, 'Manifeste indisponible.')
+        assets().pin(session['owner'], identity, consumer(request), seconds=60)
         database().consumer(session['owner'], identity)
         ready = database().record_ready(session['owner'], identity)
         if ready is not None:
@@ -679,11 +680,11 @@ def status(
     position: float | None = None,
 ):
     session = owned(request, identity)
-    if (
-        view == 'playback'
-        and session['mode'] == 'prepared'
-        and session['state'] == 'ready'
-    ):
+    if view == 'playback' and session['state'] in {
+        'ready',
+        'playing',
+        'paused',
+    }:
         pin_reader(request, session)
     from .dj_refill import schedule
 

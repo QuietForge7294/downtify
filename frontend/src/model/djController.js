@@ -69,7 +69,10 @@ function clear({ stopRemote = false } = {}) {
   const id = session.value?.id || pending?.id,
     account = owner,
     previous = commandTail
-  const remote = !session.value || session.value.mode === 'interactive'
+  const remote =
+    !session.value ||
+    session.value.mode === 'interactive' ||
+    musicAI.capabilities.value?.dj_asset_consumers === true
   const request = creation
   creation = null
   if (request && stopRemote) {
@@ -513,7 +516,10 @@ async function startQueue() {
 }
 async function stop() {
   const id = session.value?.id || pending?.id
-  const remote = !session.value || session.value.mode === 'interactive'
+  const remote =
+    !session.value ||
+    session.value.mode === 'interactive' ||
+    musicAI.capabilities.value?.dj_asset_consumers === true
   const previous = commandTail,
     account = musicAI.account.value
   const resume = player.desiredPlaying.value || player.isPlaying.value

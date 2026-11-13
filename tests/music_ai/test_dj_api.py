@@ -401,6 +401,9 @@ def test_hls_resources_are_owned_visible_no_store_and_manifest_cannot_escape(
     # Only the first playable manifest read counts, not every reload.
     assert http.get(url + 'index.m3u8', headers=headers).status_code == 200
     assert store.get(1, identity)['ready_seconds'] == ready
+    from downtify.music_ai.dj_assets import Assets
+
+    assert Assets(database).pinned(identity)
     assert (
         http.get(
             url + 'segment-00000000.ts',
@@ -761,12 +764,8 @@ def test_copy_api_is_owner_scoped_and_weekly_cards_are_metadata_only(
         card['theme'] for card in value['cards']
     }
     assert value['copies'][0]['id'] == result['id']
-    assert (
-        value['copies'][0]['tracks'] == []
-    )
-    assert (
-        value['copies'][0]['timeline'] == []
-    )
+    assert value['copies'][0]['tracks'] == []
+    assert value['copies'][0]['timeline'] == []
     assert (
         http.get(
             '/api/v1/music-ai/dj/weekly', headers={'x-test-user': '2'}
@@ -867,3 +866,21 @@ def test_weekly_preparation_is_explicit_and_idempotent(client, monkeypatch):
         http.post(url, headers=headers, json={'request_id': 'off'}).status_code
         == 409
     )
+
+
+def test_completed_interactive_audio_is_pinned_by_a_playback_reader(client):
+    from downtify.music_ai.dj_assets import Assets
+
+    http, database, _, _ = client
+    identity = validation_session(client).json()['id']
+    dj = DjStore(database)
+    job = dj.claim()
+    assert dj.publish(identity, job['lease_token'], 'ready', {'duration': 24})
+    headers = {'x-test-user': '1'}
+    url = f'/api/v1/music-ai/dj/sessions/{identity}?view=playback&consumer=browser'
+    assert http.get(url, headers=headers).status_code == 200
+    assets = Assets(database)
+    assert assets.pinned(identity)
+    assert not assets.expire(identity)
+    assert http.delete(url, headers=headers).status_code == 200
+    assert not assets.pinned(identity)

@@ -114,3 +114,71 @@ describe('music AI capability isolation', () => {
     expect(musicAI.djSelection.value).toEqual([])
   })
 })
+
+describe('weekly audio sets', () => {
+  beforeEach(() => {
+    vi.resetModules()
+    http.get.mockReset()
+    http.post.mockReset()
+  })
+  async function supported() {
+    const { musicAI } = await import('../model/musicAI')
+    musicAI.setAccount(1)
+    musicAI.capabilities.value = {
+      version: 1,
+      dj_weekly_sets: true,
+      dj_asset_copies: true,
+      dj_asset_consumers: true,
+      features: { weekly: true, dj_prepared: true, dj_weekly: true },
+    }
+    return musicAI
+  }
+  it('is off on legacy servers and sends no request', async () => {
+    const { musicAI } = await import('../model/musicAI')
+    musicAI.setAccount(1)
+    expect(musicAI.weeklySetsEnabled()).toBeFalsy()
+    expect(await musicAI.weeklySets()).toBeNull()
+    await expect(musicAI.prepareWeekly('rock', 'nonce')).rejects.toThrow()
+    expect(http.get).not.toHaveBeenCalled()
+    expect(http.post).not.toHaveBeenCalled()
+  })
+  it('keeps weekly reading separate from explicit copy and preparation intents', async () => {
+    const musicAI = await supported()
+    http.get.mockResolvedValue({ data: { cards: [], copies: [] } })
+    await musicAI.weeklySets()
+    expect(http.post).not.toHaveBeenCalled()
+    http.post.mockResolvedValue({ data: { id: 'a'.repeat(32) } })
+    await musicAI.copyDj('a'.repeat(32), 'Mon rock', 'same-copy')
+    expect(http.post).toHaveBeenLastCalledWith(
+      `/api/v1/music-ai/dj/sessions/${'a'.repeat(32)}/copies`,
+      { request_id: 'same-copy', name: 'Mon rock' }
+    )
+    await musicAI.prepareWeekly('rock', 'same-prepare')
+    expect(http.post).toHaveBeenLastCalledWith(
+      '/api/v1/music-ai/dj/weekly/rock',
+      { request_id: 'same-prepare' }
+    )
+  })
+  it('fences a weekly response after an account change', async () => {
+    const musicAI = await supported()
+    let resolve
+    http.get.mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          resolve = done
+        })
+    )
+    const pending = musicAI.weeklySets()
+    musicAI.setAccount(2)
+    resolve({ data: { cards: [{ theme: 'private' }] } })
+    expect(await pending).toBeNull()
+  })
+  it('uses a per-tab consumer only for compatible prepared media', async () => {
+    const musicAI = await supported()
+    const root = `/api/v1/music-ai/dj/sessions/${'a'.repeat(32)}`
+    const media = new URL(musicAI.mediaUrl(`${root}/media`))
+    expect(media.searchParams.get('consumer')).toMatch(/^[a-f0-9-]{36}$/)
+    expect(musicAI.mediaUrl(`${root}/hls/index.m3u8`)).not.toContain('?')
+    expect(() => musicAI.mediaUrl(`${root}/media?consumer=caller`)).toThrow()
+  })
+})
