@@ -1,6 +1,9 @@
 import contextlib
 import json
+import os
+import signal
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
@@ -112,17 +115,26 @@ def test_timeout_cannot_deliver_a_late_result_into_a_fresh_request():
         process.close()
 
 
-def test_cancellation_stops_the_analyzer_and_its_decoder(tmp_path):
+@pytest.mark.parametrize('ignore_term', [False, True])
+def test_cancellation_stops_the_analyzer_and_its_decoder(
+    tmp_path, ignore_term
+):
     marker = tmp_path / 'children.json'
+    child_ready = tmp_path / 'decoder-ready'
     code = """
 import json,os,subprocess,sys,time
 from pathlib import Path
 sys.stdin.readline()
-child = subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)'])
+child_code = "import signal,sys,time; from pathlib import Path; " + ("signal.signal(signal.SIGTERM,signal.SIG_IGN); " if sys.argv[3] == '1' else '') + "Path(sys.argv[1]).touch(); time.sleep(60)"
+child = subprocess.Popen([sys.executable,'-c',child_code,sys.argv[2]])
+while not Path(sys.argv[2]).exists():
+    time.sleep(0.005)
 Path(sys.argv[1]).write_text(json.dumps([os.getpid(), child.pid]))
 time.sleep(60)
 """
-    process = client(code, str(marker))
+    process = client(
+        code, str(marker), str(child_ready), str(int(ignore_term))
+    )
 
     def checkpoint():
         if marker.exists():
@@ -138,12 +150,27 @@ time.sleep(60)
         assert process._process is None
         for pid in json.loads(marker.read_text(encoding='utf-8')):
             status = Path(f'/proc/{pid}/stat')
-            try:
-                assert status.read_text(encoding='utf-8').split()[2] == 'Z'
-            except FileNotFoundError:
-                pass
+            deadline = time.monotonic() + 2
+            while True:
+                try:
+                    state = status.read_text(encoding='utf-8').split()[2]
+                except (FileNotFoundError, ProcessLookupError):
+                    break
+                if state == 'Z':
+                    break
+                assert time.monotonic() < deadline, (
+                    'Cancelled decoder is still running'
+                )
+                time.sleep(0.01)
     finally:
         process.close()
+        if marker.exists():
+            parent, child_pid = json.loads(marker.read_text(encoding='utf-8'))
+            try:
+                if os.getpgid(child_pid) == parent:
+                    os.killpg(parent, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
 
 def test_model_instances_survive_across_tracks_without_loading_a_new_model(

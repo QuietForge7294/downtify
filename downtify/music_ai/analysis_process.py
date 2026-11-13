@@ -52,8 +52,11 @@ class AnalysisProcess:
         except ProcessLookupError:
             pass
         try:
-            process.wait(timeout=2)
-        except subprocess.TimeoutExpired:
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                pass
+            # A decoder may ignore TERM even after its parent has exited.
             try:
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
