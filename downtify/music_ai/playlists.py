@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import struct
+import time
 from collections import Counter
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -59,6 +60,7 @@ def generate(store, owner, cadence, mood, rows, model, *, now=None):
         raise PermissionError('Feature disabled')
     profile_revision = store.metadata(f'profile_revision:{owner}', 0)
     analysis_generation = store.metadata('analysis_generation', 0)
+    selection_revision = store.metadata(f'selection_revision:{owner}', 0)
     key = period(cadence, now)
     allowed = {row['id']: row for row in rows}
     with store.connect() as db:
@@ -82,16 +84,7 @@ def generate(store, owner, cadence, mood, rows, model, *, now=None):
                 (mood, model),
             ).fetchone()
             target = struct.unpack('<512f', prompt[0]) if prompt else None
-        import time
-
-        proposed = Counter(
-            identity
-            for row in db.execute(
-                'SELECT ids FROM playlists WHERE owner=? AND created>? ORDER BY created DESC LIMIT 84',
-                (owner, time.time() - 7 * 86400),
-            )
-            for identity in json.loads(row[0])
-        )
+        proposed = recent_proposals(db, owner)
     candidates = genre_rows(mood, rows)
     target_size = DAILY_SIZE if cadence == 'daily' else WEEKLY_SIZE
     if mood in GENRES and len(candidates) < min(target_size, 8):
@@ -130,21 +123,20 @@ def generate(store, owner, cadence, mood, rows, model, *, now=None):
             for _ in range(count)
         ),
         limit=target_size,
-        rotation=f'{owner}:{mood}:{key}',
+        rotation=f'{owner}:{mood}:{key}:{selection_revision}',
         proposed=proposed,
     )
-    import time
-
     with store.connect() as db:
         db.execute('BEGIN IMMEDIATE')
         revisions = {
             row[0]: json.loads(row[1])
             for row in db.execute(
-                'SELECT key,value FROM metadata WHERE key IN (?,?,?)',
+                'SELECT key,value FROM metadata WHERE key IN (?,?,?,?)',
                 (
                     f'profile_revision:{owner}',
                     'analysis_generation',
                     'analysis_paused',
+                    f'selection_revision:{owner}',
                 ),
             )
         }
@@ -152,6 +144,8 @@ def generate(store, owner, cadence, mood, rows, model, *, now=None):
             revisions.get(f'profile_revision:{owner}', 0) != profile_revision
             or revisions.get('analysis_generation', 0) != analysis_generation
             or revisions.get('analysis_paused', False)
+            or revisions.get(f'selection_revision:{owner}', 0)
+            != selection_revision
         ):
             raise RuntimeError('Generation invalidated')
         from .store import DEFAULTS
@@ -271,3 +265,104 @@ def stored_selections(store, owner, *, now=None):
                 )
             )
     return selections
+
+
+def recent_proposals(db, owner):
+    """Current and explicitly renewed selections share a bounded rotation window."""
+    cutoff = time.time() - 7 * 86400
+    identities = [
+        identity
+        for row in db.execute(
+            'SELECT ids FROM playlists WHERE owner=? AND created>? '
+            'ORDER BY created DESC LIMIT 84',
+            (owner, cutoff),
+        )
+        for identity in json.loads(row[0])
+    ]
+    archived = db.execute(
+        'SELECT value FROM metadata WHERE key=?',
+        (f'playlist_rotation_history:{owner}',),
+    ).fetchone()
+    if archived:
+        identities.extend(
+            identity
+            for cohort in json.loads(archived[0])[-84:]
+            if cohort['created'] > cutoff
+            for identity in cohort['ids']
+        )
+    return Counter(identities)
+
+
+def refresh(store, owner, request_id, *, now=None):
+    """Invalidate this owner's current automatic mixes, without audio work."""
+    from .store import DEFAULTS
+
+    keys = {cadence: period(cadence, now) for cadence in ('daily', 'weekly')}
+    with store.connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+
+        def read(key, default):
+            row = db.execute(
+                'SELECT value FROM metadata WHERE key=?', (key,)
+            ).fetchone()
+            return json.loads(row[0]) if row else default
+
+        def write(key, value):
+            db.execute(
+                'INSERT OR REPLACE INTO metadata VALUES (?,?)',
+                (key, json.dumps(value)),
+            )
+
+        preferences = {
+            row[0]: {**DEFAULTS, **json.loads(row[1])}
+            for row in db.execute(
+                'SELECT owner,value FROM preferences WHERE owner IN (-1,?)',
+                (owner,),
+            )
+        }
+        enabled = [
+            cadence
+            for cadence in keys
+            if all(
+                preferences.get(uid, DEFAULTS)[cadence] for uid in (-1, owner)
+            )
+        ]
+        if not enabled:
+            raise PermissionError('Feature disabled')
+        receipts_key = f'playlist_refresh_receipts:{owner}'
+        receipts = read(receipts_key, [])
+        previous = next(
+            (r for r in receipts if r['request_id'] == request_id), None
+        )
+        if previous:
+            return previous['result']
+        archived = read(f'playlist_rotation_history:{owner}', [])
+        removed = 0
+        for cadence in enabled:
+            archived.extend(
+                dict(ids=json.loads(row['ids']), created=row['created'])
+                for row in db.execute(
+                    'SELECT ids,created FROM playlists '
+                    'WHERE owner=? AND cadence=? AND period=?',
+                    (owner, cadence, keys[cadence]),
+                )
+            )
+            removed += db.execute(
+                'DELETE FROM playlists WHERE owner=? AND cadence=? AND period=?',
+                (owner, cadence, keys[cadence]),
+            ).rowcount
+        archived = sorted(
+            (
+                item
+                for item in archived
+                if item['created'] > time.time() - 7 * 86400
+            ),
+            key=lambda item: item['created'],
+        )[-84:]
+        write(f'playlist_rotation_history:{owner}', archived)
+        revision = read(f'selection_revision:{owner}', 0) + 1
+        write(f'selection_revision:{owner}', revision)
+        result = dict(accepted=True, revision=revision, removed=removed)
+        receipts.append(dict(request_id=request_id, result=result))
+        write(receipts_key, receipts[-32:])
+        return result
