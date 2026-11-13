@@ -25,6 +25,7 @@ DEFAULTS = {
     'weekly': False,
     'external_beta': False,
     'dj_prepared': False,
+    'dj_weekly': False,
     'dj_interactive': False,
     'dj_trial': False,
 }

@@ -78,7 +78,7 @@ def dj_owns_compute(database, *, now=None):
 
 
 def native_sweep():
-    from fastapi import Request
+    from fastapi import HTTPException, Request
 
     from .. import api
     from ..auth import ADMIN, USER, Principal
@@ -98,10 +98,10 @@ def native_sweep():
     def user_for(uid):
         return api.state.auth.users.get(uid)
 
-    def rows_for(uid):
+    def request_for(uid):
         user = user_for(uid)
         if user is None:
-            return []
+            return None
         role = str(user.get('role') or 'user')
         principal = Principal(
             'internal',
@@ -118,8 +118,28 @@ def native_sweep():
             'headers': [],
             'state': {'principal': principal},
         })
+        return request
+
+    def rows_for(uid):
+        request = request_for(uid)
+        if request is None:
+            return []
         rows = catalog(request)
         favorites = favorite_ids(request, rows)
         return [{**row, 'favorite': row['id'] in favorites} for row in rows]
 
     refresh_due(store(), status['id'], user_for, rows_for)
+
+    from .dj_routes import visible
+    from .dj_weekly import enqueue_due
+
+    def sources_for(uid, ids):
+        request = request_for(uid)
+        if request is None:
+            return {}
+        try:
+            return visible(request, ids, sources=True)
+        except HTTPException:
+            return {}
+
+    enqueue_due(store(), user_for, rows_for, sources_for)

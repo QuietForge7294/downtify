@@ -7,8 +7,9 @@ import json
 import math
 import secrets
 import time
+from datetime import date
 
-from .store import DEFAULTS, MOODS, Store
+from .store import DEFAULTS, GENRE_THEMES, MOODS, Store
 
 ACTIVE = ('preparing', 'rendering', 'playing', 'paused')
 MODES = {'prepared': 'dj_prepared', 'interactive': 'dj_interactive'}
@@ -103,6 +104,7 @@ class DjStore:
         seed_id='',
         trial=False,
         style='library',
+        background=None,
     ):
         if type(validation) is not bool or (
             validation and mode != 'interactive'
@@ -148,6 +150,32 @@ class DjStore:
             not in {'explicit', 'audio_similarity', 'dj_analysis'}
         ):
             raise ValueError('Invalid selection intent')
+        if background is not None:
+            required = {
+                'weekly_period',
+                'weekly_theme',
+                'profile_revision',
+                'selection_revision',
+                'analysis_generation',
+            }
+            if (
+                mode != 'prepared'
+                or not isinstance(background, dict)
+                or set(background) != required
+                or background['weekly_theme'] not in {*MOODS, *GENRE_THEMES}
+                or any(
+                    type(background[key]) is not int or background[key] < 0
+                    for key in (
+                        'profile_revision',
+                        'selection_revision',
+                        'analysis_generation',
+                    )
+                )
+                or not isinstance(background['weekly_period'], str)
+                or date.fromisoformat(background['weekly_period']).weekday()
+                != 0
+            ):
+                raise ValueError('Invalid weekly render')
         identity, now = secrets.token_hex(16), time.time()
         document = {
             'theme': theme,
@@ -159,6 +187,8 @@ class DjStore:
             'error': '',
             'selection_basis': selection_basis,
         }
+        if background is not None:
+            document.update(background, background=True)
         if validation:
             document['validation'] = True
         if queue_order:
@@ -176,6 +206,13 @@ class DjStore:
             db.execute('BEGIN IMMEDIATE')
             if not enabled(db, owner, mode):
                 raise PermissionError('DJ module disabled')
+            if background is not None:
+                from .dj_background import allowed
+
+                if not allowed(db, owner, document, now=now):
+                    raise PermissionError(
+                        'Weekly module disabled or invalidated'
+                    )
             if nonce:
                 cancelled = db.execute(
                     'SELECT value FROM metadata WHERE key=?',
@@ -201,11 +238,18 @@ class DjStore:
                     ).fetchone()
                 )
             count = db.execute(
-                "SELECT count(*) FROM dj_sessions WHERE owner=? AND state='queued'",
+                "SELECT count(*) FROM dj_sessions WHERE owner=? AND state='queued' AND COALESCE(json_extract(document,'$.background'),0)!=1",
                 (owner,),
             ).fetchone()[0]
             if count >= 2:
                 raise RuntimeError('Two DJ requests are already waiting')
+            if (
+                background is not None
+                and db.execute(
+                    "SELECT 1 FROM dj_sessions WHERE COALESCE(json_extract(document,'$.background'),0)=1 AND state IN ('queued','preparing','rendering') LIMIT 1"
+                ).fetchone()
+            ):
+                raise RuntimeError('A weekly render is already waiting')
             db.execute(
                 'INSERT INTO dj_sessions(id,owner,mode,state,document,created,updated) VALUES (?,?,?,?,?,?,?)',
                 (
@@ -286,7 +330,7 @@ class DjStore:
     def list(self, owner):
         with self.database.connect() as db:
             rows = db.execute(
-                "SELECT * FROM dj_sessions WHERE owner=? AND state!='deleted' ORDER BY created DESC LIMIT 20",
+                "SELECT * FROM dj_sessions WHERE owner=? AND state!='deleted' AND COALESCE(json_extract(document,'$.background'),0)!=1 ORDER BY created DESC LIMIT 20",
                 (owner,),
             ).fetchall()
         return [self.unpack(row) for row in rows]
@@ -360,6 +404,24 @@ class DjStore:
                 "SELECT * FROM dj_sessions WHERE state IN ('preparing','rendering','playing','paused')"
             ).fetchall()
             for row in active:
+                document = json.loads(row['document'])
+                if document.get('background'):
+                    from .dj_background import allowed
+
+                    if not allowed(db, row['owner'], document, now=now):
+                        db.execute(
+                            "UPDATE dj_sessions SET state='cancelled',lease_token='',lease_until=0,updated=? WHERE id=?",
+                            (now, row['id']),
+                        )
+                    elif row['lease_until'] > now:
+                        return None
+                    else:
+                        document.update(phase='queued', progress=0.0, error='')
+                        db.execute(
+                            "UPDATE dj_sessions SET state='queued',document=?,lease_token='',lease_until=0,updated=? WHERE id=?",
+                            (json.dumps(document), now, row['id']),
+                        )
+                    continue
                 if not enabled(db, row['owner'], row['mode']):
                     db.execute(
                         "UPDATE dj_sessions SET state='cancelled',lease_token='',lease_until=0,updated=? WHERE id=?",
@@ -377,9 +439,26 @@ class DjStore:
                         (json.dumps(document), now, row['id']),
                     )
             queued = db.execute(
-                "SELECT * FROM dj_sessions WHERE state='queued' ORDER BY created,id"
+                "SELECT * FROM dj_sessions WHERE state='queued' ORDER BY COALESCE(json_extract(document,'$.background'),0),CASE WHEN mode='interactive' THEN 0 ELSE 1 END,created,id"
             ).fetchall()
             for row in queued:
+                document = json.loads(row['document'])
+                if document.get('background'):
+                    from .dj_background import allowed, blocked, workspace
+
+                    if not allowed(db, row['owner'], document, now=now):
+                        db.execute(
+                            "UPDATE dj_sessions SET state='cancelled',updated=? WHERE id=?",
+                            (now, row['id']),
+                        )
+                        continue
+                    if document.get('retry_at', 0) > now or blocked(db):
+                        continue
+                    document['render_workspace'] = workspace(row['id'], token)
+                    db.execute(
+                        'UPDATE dj_sessions SET document=? WHERE id=?',
+                        (json.dumps(document), row['id']),
+                    )
                 if not enabled(db, row['owner'], row['mode']):
                     db.execute(
                         "UPDATE dj_sessions SET state='cancelled',updated=? WHERE id=?",
@@ -399,11 +478,53 @@ class DjStore:
                 }
                 return {
                     **self.unpack(row),
+                    **document,
                     'state': 'preparing',
                     'lease_token': token,
                     'sources': sources,
                 }
         return None
+
+    def defer_background(self, identity, token, *, now=None):
+        from .dj_background import allowed
+
+        now = time.time() if now is None else now
+        with self.database.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute(
+                'SELECT * FROM dj_sessions WHERE id=? AND lease_token=?',
+                (identity, token),
+            ).fetchone()
+            if row is None or row['state'] not in ACTIVE:
+                return False
+            document = json.loads(row['document'])
+            if not document.get('background'):
+                return False
+            state = (
+                'queued'
+                if allowed(db, row['owner'], document, now=now)
+                else 'cancelled'
+            )
+            document.update(
+                phase=state, progress=0.0, error='', retry_at=now + 5
+            )
+            for key in ('timeline', 'duration', 'asset_workspace'):
+                document.pop(key, None)
+            db.execute(
+                "UPDATE dj_sessions SET state=?,document=?,lease_token='',lease_until=0,updated=? WHERE id=? AND lease_token=?",
+                (state, json.dumps(document), now, identity, token),
+            )
+            return True
+
+    def workspace(self, identity):
+        with self.database.connect() as db:
+            row = db.execute(
+                'SELECT document FROM dj_sessions WHERE id=?', (identity,)
+            ).fetchone()
+        document = json.loads(row[0]) if row else {}
+        return document.get(
+            'asset_workspace', document.get('render_workspace', identity)
+        )
 
     def publish(self, identity, token, state, changes=None, *, now=None):
         if state not in {*ACTIVE, 'ready', 'stopped', 'failed'}:
@@ -417,6 +538,38 @@ class DjStore:
             ).fetchone()
             if row is None or row['state'] not in ACTIVE:
                 return False
+            captured = json.loads(row['document'])
+            if captured.get('background'):
+                from .dj_background import allowed, blocked
+
+                if not allowed(db, row['owner'], captured, now=now):
+                    db.execute(
+                        "UPDATE dj_sessions SET state='cancelled',lease_token='',lease_until=0,updated=? WHERE id=?",
+                        (now, identity),
+                    )
+                    return False
+                if blocked(db):
+                    return False
+                if changes and any(
+                    key in changes and changes[key] != captured.get(key)
+                    for key in (
+                        'background',
+                        'weekly_period',
+                        'weekly_theme',
+                        'profile_revision',
+                        'selection_revision',
+                        'analysis_generation',
+                        'render_workspace',
+                    )
+                ):
+                    raise ValueError('Weekly render identity cannot change')
+                if (
+                    changes
+                    and 'asset_workspace' in changes
+                    and changes['asset_workspace']
+                    != captured['render_workspace']
+                ):
+                    raise ValueError('Invalid weekly audio workspace')
             if not enabled(db, row['owner'], row['mode']):
                 db.execute(
                     "UPDATE dj_sessions SET state='cancelled',lease_token='',lease_until=0,updated=? WHERE id=?",
