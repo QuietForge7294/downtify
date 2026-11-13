@@ -600,3 +600,45 @@ def test_expired_dj_heartbeat_is_not_advertised_as_available(client):
     assert not status['ready']
     assert not status['prepared_ready']
     assert status['state'] == 'unavailable'
+
+
+def test_mix_refresh_authenticated_idempotent_and_metadata_only(
+    client, monkeypatch
+):
+    from uuid import uuid4
+
+    http, database = client
+
+    def forbidden(*args, **kwargs):
+        pytest.fail(
+            'Refresh must not touch library paths or perform inference'
+        )
+
+    monkeypatch.setattr(routes, 'catalog', forbidden)
+    monkeypatch.setattr(routes, 'visible_rows', forbidden)
+    request = {'request_id': str(uuid4())}
+    url = '/api/v1/music-ai/playlists/refresh'
+    assert http.post(url, json=request).status_code == 401
+    assert (
+        http.post(
+            url, json={'request_id': 'invalid'}, headers={'x-test-user': '1'}
+        ).status_code
+        == 422
+    )
+    first = http.post(url, json=request, headers={'x-test-user': '1'})
+    assert first.status_code == 200
+    assert first.json()['accepted'] is True
+    assert (
+        http.post(url, json=request, headers={'x-test-user': '1'}).json()
+        == first.json()
+    )
+    assert database.metadata('selection_revision:2', 0) == 0
+    database.set_preferences(-1, {'daily': False, 'weekly': False})
+    assert (
+        http.post(
+            url,
+            json={'request_id': str(uuid4())},
+            headers={'x-test-user': '1'},
+        ).status_code
+        == 403
+    )

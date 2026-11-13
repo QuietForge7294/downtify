@@ -113,4 +113,44 @@ describe('music AI capability isolation', () => {
     musicAI.setAccount(2)
     expect(musicAI.djSelection.value).toEqual([])
   })
+
+  it('renews explicitly with an owner-free idempotent request and drops the home cache', async () => {
+    const { musicAI } = await import('../model/musicAI')
+    musicAI.setAccount(1)
+    musicAI.capabilities.value = { playlist_refresh: true }
+    http.get.mockResolvedValueOnce({ data: { cards: [{ mood: 'rock' }] } })
+    await musicAI.home()
+    http.post.mockResolvedValueOnce({ data: { accepted: true, revision: 1 } })
+    await musicAI.renewPlaylists('same-request')
+    expect(http.post).toHaveBeenCalledWith('/api/v1/music-ai/playlists/refresh', {
+      request_id: 'same-request',
+    })
+    http.get.mockResolvedValueOnce({ data: { cards: [] } })
+    expect(await musicAI.home()).toEqual([])
+    expect(http.get).toHaveBeenCalledTimes(2)
+  })
+
+  it('rejects an old account renewal response without clearing the new home cache', async () => {
+    const { musicAI } = await import('../model/musicAI')
+    musicAI.setAccount(1)
+    musicAI.capabilities.value = { playlist_refresh: true }
+    let finish
+    http.post.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const renewal = musicAI.renewPlaylists('old')
+    musicAI.setAccount(2)
+    http.get.mockResolvedValueOnce({ data: { cards: [{ mood: 'pop' }] } })
+    await musicAI.home()
+    finish({ data: { accepted: true } })
+    await expect(renewal).rejects.toThrow('Le compte a changé')
+    expect(await musicAI.home()).toEqual([{ mood: 'pop' }])
+    expect(http.get).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not call the renewal endpoint on an older server', async () => {
+    const { musicAI } = await import('../model/musicAI')
+    musicAI.setAccount(1)
+    await expect(musicAI.renewPlaylists('intent')).rejects.toThrow()
+    expect(http.post).not.toHaveBeenCalled()
+  })
+
 })

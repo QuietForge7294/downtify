@@ -476,6 +476,14 @@ class Store:
             )
             db.execute('DELETE FROM listens WHERE owner=?', (owner,))
             db.execute('DELETE FROM playlists WHERE owner=?', (owner,))
+            db.execute(
+                'DELETE FROM metadata WHERE key IN (?,?,?)',
+                (
+                    f'playlist_rotation_history:{owner}',
+                    f'playlist_refresh_receipts:{owner}',
+                    f'selection_revision:{owner}',
+                ),
+            )
 
     def enqueue(self, identity: str, kind: str, payload: dict, *, priority=0):
         with self.connect() as db:

@@ -55,6 +55,7 @@ def rank(
         target = vectors[seed]
     # Personal taste also guides mood mixes, rather than rewarding only the
     # exact tracks already heard. The mood remains the dominant component.
+    mood_target = target is not None and seed is None
     personal = None
     favorites = set(favorites) & set(visible)
     if ids and seed is None:
@@ -163,7 +164,7 @@ def rank(
                 'Sonorités proches'
                 if seed
                 else 'Correspond à cette humeur'
-                if target is not None and rotation
+                if mood_target
                 else 'Proche de vos écoutes'
             )
             if content is not None
