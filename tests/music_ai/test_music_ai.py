@@ -238,6 +238,7 @@ def test_playlist_cannot_reappear_after_concurrent_shutdown(
 
 def test_personal_taste_guides_moods_and_stays_user_scoped():
     import time
+
     import numpy as np
 
     rows = [
