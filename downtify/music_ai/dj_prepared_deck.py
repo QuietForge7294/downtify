@@ -28,7 +28,7 @@ class DecodedDeck:
 
 
 def _clone(owner_io):
-    return AudioIO(
+    clone = AudioIO(
         owner_io.cache,
         owner_io.roots,
         budget=owner_io.budget,
@@ -40,6 +40,9 @@ def _clone(owner_io):
             else None
         ),
     )
+    if hasattr(owner_io, 'reclaim'):
+        clone.reclaim = owner_io.reclaim
+    return clone
 
 
 def _private_path(value, owner_io, pattern):

@@ -122,9 +122,12 @@ describe('music AI capability isolation', () => {
     await musicAI.home()
     http.post.mockResolvedValueOnce({ data: { accepted: true, revision: 1 } })
     await musicAI.renewPlaylists('same-request')
-    expect(http.post).toHaveBeenCalledWith('/api/v1/music-ai/playlists/refresh', {
-      request_id: 'same-request',
-    })
+    expect(http.post).toHaveBeenCalledWith(
+      '/api/v1/music-ai/playlists/refresh',
+      {
+        request_id: 'same-request',
+      }
+    )
     http.get.mockResolvedValueOnce({ data: { cards: [] } })
     expect(await musicAI.home()).toEqual([])
     expect(http.get).toHaveBeenCalledTimes(2)
@@ -135,7 +138,12 @@ describe('music AI capability isolation', () => {
     musicAI.setAccount(1)
     musicAI.capabilities.value = { playlist_refresh: true }
     let finish
-    http.post.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    http.post.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        })
+    )
     const renewal = musicAI.renewPlaylists('old')
     musicAI.setAccount(2)
     http.get.mockResolvedValueOnce({ data: { cards: [{ mood: 'pop' }] } })
@@ -152,7 +160,6 @@ describe('music AI capability isolation', () => {
     await expect(musicAI.renewPlaylists('intent')).rejects.toThrow()
     expect(http.post).not.toHaveBeenCalled()
   })
-
 })
 
 describe('weekly audio sets', () => {

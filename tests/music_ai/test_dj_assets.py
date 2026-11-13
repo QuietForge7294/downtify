@@ -203,3 +203,68 @@ def test_copies_keep_the_current_permission_gate_on_retry(fixture):
     database.set_preferences(1, {'dj_prepared': False})
     with pytest.raises(PermissionError):
         assets.copy(1, source['id'], 'Keep', 'permission-retry')
+
+
+def test_orphan_reclamation_keeps_referenced_and_recent_workspaces(fixture):
+    import os
+    import time
+
+    _, _, assets = fixture
+    source = ready(fixture, immutable=True)
+    old = assets.directory('b' * 32)
+    old.mkdir()
+    (old / 'partial.audio').write_bytes(b'O' * 200)
+    recent = assets.directory('c' * 32)
+    recent.mkdir()
+    (recent / 'partial.audio').write_bytes(b'R' * 100)
+    os.utime(old, (time.time() - 7200, time.time() - 7200))
+    os.utime(
+        assets.directory(source['id']),
+        (time.time() - 7200, time.time() - 7200),
+    )
+    assets.budget = 200
+    assets.reserve(50)
+    assert not old.exists()
+    assert recent.exists()
+    assert assets.media(source).read_bytes() == b'accepted-audio'
+
+
+def test_orphan_cleanup_stops_on_lost_lease_before_unlinking(fixture):
+    import os
+    import time
+
+    _, _, assets = fixture
+    old = assets.directory('b' * 32)
+    old.mkdir()
+    original = old / 'partial.audio'
+    original.write_bytes(b'keep')
+    os.utime(old, (time.time() - 7200, time.time() - 7200))
+
+    def cancelled():
+        raise PermissionError('lease lost')
+
+    with pytest.raises(PermissionError):
+        assets.prune_orphans(cancelled)
+    assert original.read_bytes() == b'keep'
+
+
+def test_orphan_cleanup_can_renew_a_compute_lease_without_nested_writers(
+    fixture,
+):
+    import os
+    import time
+
+    database, _, assets = fixture
+    old = assets.directory('d' * 32)
+    old.mkdir()
+    (old / 'partial.audio').write_bytes(b'old')
+    os.utime(old, (time.time() - 7200, time.time() - 7200))
+
+    def checkpoint():
+        database.set_metadata(
+            'test_checkpoint', database.metadata('test_checkpoint', 0) + 1
+        )
+
+    assert assets.prune_orphans(checkpoint) == 1
+    assert database.metadata('test_checkpoint') >= 2
+    assert not old.exists()

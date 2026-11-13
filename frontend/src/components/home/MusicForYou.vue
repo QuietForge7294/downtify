@@ -50,7 +50,10 @@
         >Actualiser</UiButton
       >
       <UiButton
-        v-if="musicAI.capabilities.value?.playlist_refresh && (enabled('daily') || enabled('weekly'))"
+        v-if="
+          musicAI.capabilities.value?.playlist_refresh &&
+          (enabled('daily') || enabled('weekly'))
+        "
         :disabled="busy || indexLoading"
         @click="renew"
         >Renouveler mes mixes</UiButton
@@ -59,7 +62,9 @@
         >← Tous mes mixes</UiButton
       >
     </div>
-    <p v-if="renewalMessage" role="status" class="text-muted">{{ renewalMessage }}</p>
+    <p v-if="renewalMessage" role="status" class="text-muted">
+      {{ renewalMessage }}
+    </p>
     <p
       v-if="indexLoading && !playlists.length"
       role="status"
