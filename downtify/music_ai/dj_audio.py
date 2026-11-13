@@ -128,6 +128,9 @@ class AudioIO:
         )
 
     def check_space(self, requested):
+        reclaim = getattr(self, 'reclaim', None)
+        if reclaim is not None:
+            reclaim(requested)
         used = 0
         for path in self.cache.rglob('*'):
             try:

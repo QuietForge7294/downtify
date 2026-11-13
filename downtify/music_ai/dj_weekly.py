@@ -28,7 +28,8 @@ def enqueue_due(database, user_for, rows_for, sources_for, *, now=None):
         return 0
     status = database.metadata('dj', {})
     if (
-        not status.get('prepared_ready')
+        status.get('weekly_protocol') != 1
+        or not status.get('prepared_ready')
         or not 0 <= timestamp - status.get('seen', 0) <= 20
     ):
         return 0
@@ -82,6 +83,15 @@ def enqueue_due(database, user_for, rows_for, sources_for, *, now=None):
                     for key, value in revision.items()
                 )
             }
+            # Deleted documents are intentionally erased, but request receipts remain.
+            # Never regenerate an automatically evicted/deleted set in a tight loop.
+            for theme in THEMES:
+                _, nonce = weekly_request(uid, week, theme, revision)
+                if db.execute(
+                    'SELECT 1 FROM dj_requests WHERE owner=? AND nonce=?',
+                    (uid, nonce),
+                ).fetchone():
+                    existing.add(theme)
             selections = {
                 row['mood']: json.loads(row['ids'])
                 for row in db.execute(
@@ -112,12 +122,7 @@ def enqueue_due(database, user_for, rows_for, sources_for, *, now=None):
             background = dict(
                 weekly_period=week, weekly_theme=theme, **revision
             )
-            intent = json.dumps(
-                ['weekly', uid, background],
-                sort_keys=True,
-                separators=(',', ':'),
-            )
-            nonce = 'weekly:' + hashlib.sha256(intent.encode()).hexdigest()
+            intent, nonce = weekly_request(uid, week, theme, revision)
             try:
                 dj.create(
                     uid,
@@ -134,3 +139,11 @@ def enqueue_due(database, user_for, rows_for, sources_for, *, now=None):
             database.set_metadata('weekly_last_owner', uid)
             return 1
     return 0
+
+
+def weekly_request(owner, week, theme, revision):
+    background = dict(weekly_period=week, weekly_theme=theme, **revision)
+    intent = json.dumps(
+        ['weekly', owner, background], sort_keys=True, separators=(',', ':')
+    )
+    return intent, 'weekly:' + hashlib.sha256(intent.encode()).hexdigest()

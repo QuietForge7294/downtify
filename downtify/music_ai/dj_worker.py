@@ -186,6 +186,7 @@ class DjWorker:
                 'analysis_model': self.analysis,
                 'seen': time.time(),
                 'simultaneous_sessions': 1,
+                'weekly_protocol': 1,
                 'cache_bytes': self.cache_bytes,
             },
         )
@@ -570,6 +571,14 @@ class DjWorker:
                 workspace=job.get('render_workspace', job['id'])
                 if job.get('background')
                 else job['id'],
+            )
+            from .dj_assets import Assets
+
+            assets = Assets(
+                self.database, budget=self.cache_bytes, min_free=self.min_free
+            )
+            io.reclaim = lambda requested: assets.reserve(
+                requested, self.checkpoint
             )
             if job['mode'] == 'prepared':
                 self.prepared(io)
