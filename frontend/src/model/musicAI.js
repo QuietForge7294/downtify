@@ -308,6 +308,21 @@ export const musicAI = {
   async playlists() {
     return (await http.get('/api/v1/music-ai/playlists')).data.playlists
   },
+  async renewPlaylists(requestId) {
+    const owner = account.value
+    if (!owner || !capabilities.value?.playlist_refresh)
+      throw new Error('Renouvellement indisponible sur ce serveur')
+    const response = await http.post('/api/v1/music-ai/playlists/refresh', {
+      request_id: requestId,
+    })
+    if (owner !== account.value) throw new Error('Le compte a changé')
+    if (response.data?.accepted !== true)
+      throw new Error('Le renouvellement n’a pas été accepté')
+    homeGeneration++
+    homeCache = null
+    homeFlight = null
+    return response.data
+  },
   async forget() {
     homeGeneration++
     homeCache = null

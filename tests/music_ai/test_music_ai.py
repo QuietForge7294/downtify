@@ -205,7 +205,9 @@ def test_cached_mood_snapshot_excludes_replaced_audio_until_reanalysis(store):
     assert [row['id'] for row in restored] == [row['id'] for row in initial]
 
 
-@pytest.mark.parametrize('operation', ['disable', 'forget', 'clear'])
+@pytest.mark.parametrize(
+    'operation', ['disable', 'forget', 'clear', 'refresh']
+)
 def test_playlist_cannot_reappear_after_concurrent_shutdown(
     store, monkeypatch, operation
 ):
@@ -223,6 +225,8 @@ def test_playlist_cannot_reappear_after_concurrent_shutdown(
     def changed(*args, **kwargs):
         if operation == 'disable':
             store.set_preferences(1, {'daily': False})
+        elif operation == 'refresh':
+            playlists.refresh(store, 1, 'concurrent-refresh')
         elif operation == 'forget':
             store.forget(1)
         else:
@@ -311,3 +315,101 @@ def test_an_early_skip_is_less_likely_to_be_proposed_again():
         **kwargs,
     )
     assert result[0]['id'] != first
+
+
+def test_refresh_only_current_owner_periods_and_preserves_rotation(store):
+    import json
+    import time
+
+    from downtify.music_ai.playlists import recent_proposals, refresh
+
+    now = datetime.now(PARIS)
+    with store.connect() as db:
+        for owner, cadence, key, identity in (
+            (1, 'daily', period('daily', now), '0'),
+            (1, 'weekly', period('weekly', now), '1'),
+            (1, 'daily', '2020-01-01', '2'),
+            (2, 'daily', period('daily', now), '3'),
+        ):
+            db.execute(
+                'INSERT INTO playlists VALUES (?,?,?,?,?,?)',
+                (
+                    owner,
+                    cadence,
+                    'calme',
+                    key,
+                    json.dumps([identity]),
+                    time.time(),
+                ),
+            )
+        before = recent_proposals(db, 1)
+    original = refresh(store, 1, 'request', now=now)
+    assert original == dict(accepted=True, revision=1, removed=2)
+    assert refresh(store, 1, 'request', now=now) == original
+    with store.connect() as db:
+        assert recent_proposals(db, 1) == before
+        assert db.execute('SELECT count(*) FROM playlists').fetchone()[0] == 2
+        assert (
+            db.execute('SELECT ids FROM playlists WHERE owner=2').fetchone()[0]
+            == '["3"]'
+        )
+    assert store.metadata('selection_revision:2', 0) == 0
+    assert store.metadata('selection_revision:1') == 1
+    store.forget(1)
+    assert store.metadata('playlist_rotation_history:1') is None
+    assert store.metadata('playlist_refresh_receipts:1') is None
+
+
+def test_refresh_respects_effective_flags_and_is_bounded(store):
+    import json
+    import time
+
+    from downtify.music_ai.playlists import refresh
+
+    store.set_preferences(-1, {'daily': False, 'weekly': False})
+    with pytest.raises(PermissionError):
+        refresh(store, 1, 'disabled')
+    assert store.metadata('selection_revision:1', 0) == 0
+    store.set_preferences(-1, {'daily': True})
+    for i in range(90):
+        with store.connect() as db:
+            db.execute(
+                'INSERT INTO playlists VALUES (?,?,?,?,?,?)',
+                (
+                    1,
+                    'daily',
+                    'calme',
+                    period('daily'),
+                    json.dumps([str(i)]),
+                    time.time(),
+                ),
+            )
+        refresh(store, 1, str(i))
+    assert len(store.metadata('playlist_rotation_history:1')) == 84
+    assert len(store.metadata('playlist_refresh_receipts:1')) == 32
+
+
+def test_refresh_varies_equal_candidates_without_reanalysis(store):
+    from downtify.music_ai.playlists import refresh
+
+    rows = [{'id': str(i), 'artist': str(i)} for i in range(12)]
+    with store.connect() as db:
+        db.execute(
+            'INSERT INTO mood_vectors VALUES (?,?,?)',
+            ('calme', 'm', Store.pack(vector())),
+        )
+    for i in range(12):
+        store.put_analysis(str(i), f'v{i}', 'm', vector())
+    first = generate(store, 1, 'daily', 'calme', rows, 'm')
+    refresh(store, 1, 'renew')
+    second = generate(store, 1, 'daily', 'calme', rows, 'm')
+    assert [r['id'] for r in first] != [r['id'] for r in second]
+    assert len(store.vectors('m', set(str(i) for i in range(12)))) == 12
+
+
+def test_daily_personal_rotation_keeps_an_accurate_reason():
+    rows = [{'id': 'a', 'artist': 'A'}, {'id': 'b', 'artist': 'B'}]
+    result = rank(
+        rows, {'a': vector(), 'b': vector()}, favorites=['a'], rotation='day'
+    )
+    assert all(row['reason'] == 'Proche de vos écoutes' for row in result)
