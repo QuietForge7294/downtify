@@ -114,6 +114,9 @@ class Store:
             db.execute(
                 "CREATE INDEX IF NOT EXISTS jobs_analysis_track ON jobs(json_extract(payload,'$.track')) WHERE kind='analysis'"
             )
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS jobs_rhythm_track ON jobs(json_extract(payload,'$.track'),json_extract(payload,'$.model'),json_extract(payload,'$.fingerprint')) WHERE kind='rhythm'"
+            )
             self._freeze_existing_preferences(db)
 
     @staticmethod

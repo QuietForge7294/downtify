@@ -624,6 +624,15 @@ def hls(identity: str, filename: str, request: Request):
     return FileResponse(target, media_type='video/mp2t', headers=headers)
 
 
+@router.get('/analysis')
+def analysis_coverage(request: Request):
+    from . import routes as base
+    from .rhythm_queue import coverage
+
+    base.admin(request)
+    return coverage(database().database)
+
+
 @router.get('/readiness')
 def readiness(request: Request):
     """Objective check: a warm DJ session should be playable within ten seconds."""

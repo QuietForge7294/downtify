@@ -237,6 +237,7 @@ class DjWorker:
                 if ready
                 else 'disabled',
                 'engine': self.engine,
+                'analysis_model': self.analysis,
                 'seen': time.time(),
                 'simultaneous_sessions': 1,
                 'cache_bytes': self.cache_bytes,
@@ -277,8 +278,7 @@ class DjWorker:
         ):
             raise PermissionError('dj_session_stopped')
 
-    def analyze(self, track, source, io, generation, *, checkpoint=None):
-        checkpoint = checkpoint or self.checkpoint
+    def analysis_result(self, track, source, io, checkpoint):
         checkpoint()
         audio = source.get('snapshot', source)
         original, _ = io.original(audio['path'], audio['source_version'])
@@ -300,7 +300,7 @@ class DjWorker:
             '--cache',
             str(self.cache),
             '--workspace',
-            self.job['id'],
+            io.workspace.name,
             '--cache-bytes',
             str(self.cache_bytes),
             '--min-free',
@@ -327,6 +327,12 @@ class DjWorker:
         checkpoint()
         io.original(audio['path'], audio['source_version'])
         result['source_version'] = source['source_version']
+        return result
+
+    def analyze(self, track, source, io, generation, *, checkpoint=None):
+        checkpoint = checkpoint or self.checkpoint
+        result = self.analysis_result(track, source, io, checkpoint)
+        checkpoint()
         if not self.dj.put_profile(
             track,
             self.analysis,
@@ -655,7 +661,7 @@ class DjWorker:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=('work', 'analyze'))
+    parser.add_argument('action', choices=('work', 'analyze', 'preanalyze'))
     parser.add_argument('--database', type=Path)
     parser.add_argument('--cache', type=Path)
     parser.add_argument('--workspace')
@@ -670,8 +676,13 @@ def main():
         return
     if options.database is None:
         parser.error('--database is required')
+    worker_class = DjWorker
+    if options.action == 'preanalyze':
+        from .rhythm_worker import RhythmWorker
+
+        worker_class = RhythmWorker
     worker = retry_busy(
-        lambda: DjWorker(
+        lambda: worker_class(
             Store(options.database),
             options.models,
             options.root,
