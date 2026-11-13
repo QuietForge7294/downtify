@@ -355,6 +355,8 @@ class AudioIO:
             self.original(path, before)
             return {
                 'profile': asdict(profile),
+                'beats': [float(beat) for beat in beats],
+                'transition_points': list(profile.downbeats),
                 'loudness': levels,
                 'source_version': before,
             }
