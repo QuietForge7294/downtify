@@ -27,6 +27,16 @@ class AudioError(RuntimeError):
     pass
 
 
+def decode_filter(speed, gain):
+    # A unity-tempo RubberBand pass is not a no-op: some 44.1 kHz MP3s
+    # lose more than the permitted tail tolerance when resampled to 48 kHz.
+    # Keep the original samples when there is no tempo change to make.
+    volume = f'volume={gain:.8f}dB'
+    if speed == 1.0:
+        return volume
+    return f'rubberband=tempo={speed:.10f}:pitch=1:channels=together,{volume}'
+
+
 def run_audio(
     arguments,
     checkpoint,
@@ -431,7 +441,7 @@ class AudioIO:
                 '-map_metadata',
                 '-1',
                 '-af',
-                f'rubberband=tempo={row["speed"]:.10f}:pitch=1:channels=together,volume={gain:.8f}dB',
+                decode_filter(row['speed'], gain),
                 '-t',
                 f'{frames / RATE:.9f}',
                 '-ar',
@@ -485,7 +495,7 @@ class AudioIO:
                     '-map_metadata',
                     '-1',
                     '-af',
-                    f'rubberband=tempo={row["speed"]:.10f}:pitch=1:channels=together,volume={gain:.8f}dB',
+                    decode_filter(row['speed'], gain),
                     '-t',
                     f'{frames / RATE:.9f}',
                     '-ar',
