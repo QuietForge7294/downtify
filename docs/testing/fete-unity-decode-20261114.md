@@ -26,7 +26,14 @@ It compares complete and progressive MP3 decoding to actual FFmpeg reference
 samples and verifies that tempo 1.02 still changes duration without changing
 the tone's pitch. Tests preserve the original input hash.
 
-Qualification still requires the corrected production decoder on the real
-source and one complete 25-track Fête preparation, followed by actual
-playback. A successful isolated test does not qualify the weekly set or
-the phone. No production service was replaced or restarted for these probes.
+The corrected `AudioIO.decode` was then loaded in a temporary diagnostic
+process in the deployed DJ container, independently of its running worker.
+On that same real source and plan, it produced exactly 10,652,944 frames in
+0.703 s with neutral gain and an unchanged source signature. Temporary PCM
+was removed after validation. Two earlier attempts from a separate container
+could not open the read-only database mount and stopped before decoding;
+permissions were preserved. No production module or service was replaced.
+
+Qualification still requires one complete 25-track Fête preparation followed
+by actual playback. Successful decoder checks do not qualify the weekly set
+or the phone. No production service was restarted for these probes.
