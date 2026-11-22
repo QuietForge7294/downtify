@@ -7,7 +7,11 @@
       <main class="flex-1 pb-8">
         <RouterView v-slot="{ Component, route: viewRoute }">
           <Transition name="page" mode="out-in">
-            <component :is="Component" :key="viewKey(viewRoute)" />
+            <component
+              v-if="policyLoaded"
+              :is="Component"
+              :key="viewKey(viewRoute) + ':' + libraryOnly"
+            />
           </Transition>
         </RouterView>
       </main>
@@ -25,14 +29,22 @@
     <UiDialog />
     <CreatePlaylistModal />
     <RenamePlaylistModal />
+    <PlaylistShareModal />
     <AddTracksToPlaylistModal />
     <DefaultPasswordPrompt />
     <ReplaceAudioDialog v-if="auth.isAdmin.value" />
+    <BuyLinksDialog />
+    <TrackOriginDialog />
   </div>
 </template>
 
 <script setup>
-import { ref, watch } from 'vue'
+import { ref, watch, onMounted, onUnmounted } from 'vue'
+import {
+  libraryOnly,
+  policyLoaded,
+  startMusicPolicy,
+} from '/src/model/musicPolicy'
 import { useRoute, useRouter } from 'vue-router'
 import SideNav from './SideNav.vue'
 import TopBar from './TopBar.vue'
@@ -43,11 +55,14 @@ import ShortcutsDialog from './ShortcutsDialog.vue'
 import UiToasts from '../ui/UiToasts.vue'
 import UiDialog from '../ui/UiDialog.vue'
 import CreatePlaylistModal from '../library/CreatePlaylistModal.vue'
+import PlaylistShareModal from '../library/PlaylistShareModal.vue'
 import RenamePlaylistModal from '../library/RenamePlaylistModal.vue'
 import AddTracksToPlaylistModal from '../library/AddTracksToPlaylistModal.vue'
 import SignIn from './SignIn.vue'
 import DefaultPasswordPrompt from './DefaultPasswordPrompt.vue'
 import ReplaceAudioDialog from '../library/ReplaceAudioDialog.vue'
+import BuyLinksDialog from '../library/BuyLinksDialog.vue'
+import TrackOriginDialog from '../monitor/TrackOriginDialog.vue'
 import API from '/src/model/api'
 import { useAccount } from '/src/model/account'
 import { useAuth } from '/src/model/auth'
@@ -56,6 +71,9 @@ import { usePlayer } from '/src/model/player'
 import { usePlayerPrefs } from '/src/model/playerPrefs'
 import { useLibrary } from '/src/model/library'
 import { useDiscover } from '/src/model/discover'
+import { musicAI } from '/src/model/musicAI'
+import { attachMusicAiListening } from '/src/model/musicAiListening'
+import { useKaraokeStage } from '/src/model/karaokeStage'
 import { useNowPlaying, useUi } from '/src/model/ui'
 import { useShortcuts } from './shortcuts'
 
@@ -69,6 +87,23 @@ const router = useRouter()
 const ui = useUi()
 const nowPlaying = useNowPlaying()
 const shortcutsOpen = ref(false)
+let stopPolicy
+let stopAiTracking
+let aiRefreshTimer
+onMounted(() => {
+  stopPolicy = startMusicPolicy()
+  stopAiTracking = player.observeAudio((audio) =>
+    attachMusicAiListening(audio, () => player.currentTrack.value)
+  )
+  aiRefreshTimer = setInterval(() => {
+    void musicAI.refresh()
+  }, 15000)
+})
+onUnmounted(() => {
+  stopPolicy?.()
+  stopAiTracking?.()
+  clearInterval(aiRefreshTimer)
+})
 
 // The Now playing overlay lives in the query string (?np=1); it must not
 // remount the page underneath it.
@@ -82,7 +117,9 @@ useLibrary().load()
 watch(
   () => auth.user.value?.id,
   (id) => {
+    musicAI.setAccount(id)
     if (!id) return
+    void musicAI.refresh()
     account.start()
     account.startPlaybackReports()
   },
@@ -93,6 +130,7 @@ API.onForbidden(() => {
 })
 // Count listens for Discover, whichever page the music is playing on.
 useDiscover().startListenTracking()
+useKaraokeStage().resume()
 
 useShortcuts({
   player,

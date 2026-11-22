@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import tailwindcss from '@tailwindcss/vite'
@@ -25,10 +26,16 @@ export default defineConfig({
   },
   build: {
     rollupOptions: {
+      // The projected karaoke window is its own page, without the player.
+      input: {
+        main: fileURLToPath(new URL('./index.html', import.meta.url)),
+        karaoke: fileURLToPath(new URL('./karaoke.html', import.meta.url)),
+      },
       output: {
         // Framework code and translations change rarely — keep them in
         // their own long-cached chunks.
         manualChunks(id) {
+          if (id.includes('node_modules/hls.js/')) return 'dj-hls'
           if (id.includes('node_modules')) return 'vendor'
           if (id.includes('/src/i18n/')) return 'i18n'
         },

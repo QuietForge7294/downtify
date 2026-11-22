@@ -1,29 +1,32 @@
 [project]
 name = "downtify"
-version = "3.5.0"
+version = "3.10.0"
 description = "Download your Spotify playlists and songs along with album art and metadata in a self-hosted way via Docker"
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
 dependencies = [
-    "fastapi>=0.142.2",
+    "fastapi>=0.162.0",
     "feedparser>=6.0.14",
-    "httpx>=0.28.1",
+    "httpx[socks]>=0.28.1",
+    "joserfc>=1.8.0",
     "load-dotenv>=0.1.0",
     "loguru>=0.7.3",
     "mutagen>=1.48.1",
+    "requests[socks]>=2.34.2",
     "uvicorn>=0.54.0",
-    "websockets>=17.1",
-    "yt-dlp>=2026.8.19",
+    "websockets>=17.4",
+    "yt-dlp>=2026.10.26",
     "ytmusicapi>=1.12.3",
-    "zeroconf>=0.151.5",
+    "zeroconf>=0.153.0",
 ]
 
 [dependency-groups]
 dev = [
     "codeflash>=0.20.6",
-    "httpx2>=2.13.1",
-    "pytest>=9.1.1",
-    "ruff>=0.16.9",
+    "httpx2>=2.16.0",
+    "pytest>=9.2.0",
+    "pytest-codspeed>=5.0.4",
+    "ruff>=0.17.4",
 ]
 
 [tool.pytest.ini_options]
@@ -49,6 +52,13 @@ preview = true
 quote-style = 'single'
 
 [tool.ruff.lint.per-file-ignores]
+# Companions load heavy audio dependencies lazily and implement worker protocols.
+# Numerical pipelines retain named intermediate values for review/debugging.
+"downtify/music_ai/*.py" = ["PLC0415", "PLR0914", "PLR0904", "PLR6301"]
+# Test doubles implement the same instance protocols; imports follow monkeypatches.
+# Invalid-input matrices check exception classes, without coupling error wording.
+"tests/music_ai/*.py" = ["PLC0415", "PLR6301", "PT011"]
+"curation/*.py" = ["E501", "PLR2004"]
 "main.py" = ["E501", "PLR0915", "PLR2004", "PLR1702", "PLR0912", "PLR0911"]
 "downloader.py" = ["PLC1901"]
 "downtify/*.py" = ["E501", "PLR0913", "PLR0917", "PLR2004", "PLW0603", "PLR0911", "PLR0915", "PLR0912", "PLR0916"]

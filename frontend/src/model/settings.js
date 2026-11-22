@@ -1,12 +1,22 @@
 import { ref, computed, watch } from 'vue'
 
 import API from '/src/model/api'
+import { libraryOnly } from '/src/model/musicPolicy'
 import { useAuth } from '/src/model/auth'
 import { currentLocale } from '/src/i18n'
 import { needsLanguageSync, splitUiLanguage } from '/src/lib/uiLanguage'
 
 const settings = ref({
+  library_only: false,
   audio_providers: ['youtube-music'],
+  deemix: {
+    enabled: false,
+    base_url: '',
+    remote_dir: '/downloads',
+    source_dir: '/deemix',
+    bitrate: '3',
+    download_timeout_seconds: 600,
+  },
   slskd: {
     enabled: false,
     base_url: '',
@@ -25,9 +35,17 @@ const settings = ref({
     duration_tolerance_percent: 15,
     mix_duration_tolerance_percent: 50,
     extensions: ['mp3', 'flac'],
+    strict_format_priority: false,
+    extensions_whitelist: false,
     min_bitrate: 256,
+    advanced: false,
+    unknown_bitrate: 'auto',
+    format_min_bitrate: {},
+    max_bitrate: 0,
+    prefer_bitrate: false,
   },
   external_library: {
+    primary_folder: '',
     folders: [],
   },
   lyrics_providers: [''],
@@ -36,12 +54,14 @@ const settings = ref({
   lyrics_lrc_dir: '/data/lyrics',
   format: '',
   bitrate: '320',
+  cover_min_resolution: 0,
   output: '',
   generate_m3u: true,
   download_cover_art_playlists: true,
   download_cover_art_artist: true,
   download_cover_art_artist_banner: false,
   sync_navidrome: true,
+  allow_playlist_sharing: true,
   navidrome: {
     enabled: false,
     url: '',
@@ -50,6 +70,7 @@ const settings = ref({
     admin_username: '',
     admin_password: '',
     public_playlist: false,
+    m3u_import: false,
     scan_after_download: true,
     scan_wait_seconds: 120,
     scan_poll_seconds: 30,
@@ -83,9 +104,15 @@ const MIN_COVER_RESOLUTION = 300
 const MAX_COVER_RESOLUTION = 1200
 
 const settingsOptions = {
-  audio_providers: ['youtube', 'youtube-music', 'slskd'],
+  audio_providers: [
+    'youtube',
+    'youtube-music',
+    'soundcloud',
+    'slskd',
+    'deemix',
+  ],
   lyrics_providers: ['lrclib', 'genius', 'musixmatch', 'azlyrics'],
-  format: ['mp3', 'flac', 'ogg', 'opus', 'm4a'],
+  format: ['mp3', 'flac', 'ogg', 'opus', 'm4a', 'original'],
   bitrate: ['128', '192', '256', '320'],
   max_parallel_downloads_presets: [1, 2, 3, 5, 8],
   max_parallel_downloads_min: MIN_PARALLEL_DOWNLOADS,
@@ -100,6 +127,7 @@ const settingsOptions = {
   external_sync_delay_seconds_min: MIN_DOWNLOAD_DELAY_SECONDS,
   external_sync_delay_seconds_max: MAX_DOWNLOAD_DELAY_SECONDS,
   cover_resolution_presets: [300, 600, 800, 1000, 1200],
+  cover_min_resolution_presets: [0, 600, 1000, 1200],
   cover_resolution_min: MIN_COVER_RESOLUTION,
   cover_resolution_max: MAX_COVER_RESOLUTION,
   output: '{artists} - {title}.{output-ext}',
@@ -197,10 +225,12 @@ function loadServerSettings() {
         ...settings.value,
         ...rest,
         slskd: { ...settings.value.slskd, ...(rest.slskd || {}) },
+        deemix: { ...settings.value.deemix, ...(rest.deemix || {}) },
         navidrome: { ...settings.value.navidrome, ...(rest.navidrome || {}) },
         external_library: {
           ...settings.value.external_library,
           ...(rest.external_library || {}),
+          primary_folder: rest.external_library?.primary_folder || '',
           folders: Array.isArray(rest.external_library?.folders)
             ? rest.external_library.folders
             : settings.value.external_library.folders,
@@ -247,11 +277,15 @@ function rememberExternalFolders(folders) {
     settings.value.external_library = { folders: [] }
   }
   settings.value.external_library.folders = folders
+  if (!folders.includes(settings.value.external_library.primary_folder)) {
+    settings.value.external_library.primary_folder = ''
+  }
   if (!saved.value) return
   try {
     const parsed = JSON.parse(saved.value)
     parsed.external_library = {
       ...(parsed.external_library || {}),
+      primary_folder: settings.value.external_library.primary_folder || '',
       folders,
     }
     saved.value = JSON.stringify(parsed)
@@ -276,16 +310,19 @@ async function saveSettings() {
       ...settings.value,
       ...rest,
       slskd: { ...settings.value.slskd, ...(rest.slskd || {}) },
+      deemix: { ...settings.value.deemix, ...(rest.deemix || {}) },
       navidrome: { ...settings.value.navidrome, ...(rest.navidrome || {}) },
       external_library: {
         ...settings.value.external_library,
         ...(rest.external_library || {}),
+        primary_folder: rest.external_library?.primary_folder || '',
         folders: Array.isArray(rest.external_library?.folders)
           ? rest.external_library.folders
           : settings.value.external_library.folders,
       },
     }
     saved.value = snapshot()
+    libraryOnly.value = rest.library_only === true
     isSaved.value = true
     return true
   } catch (error) {

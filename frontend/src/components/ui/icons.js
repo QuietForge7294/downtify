@@ -20,6 +20,8 @@ export const STROKE = {
   'log-in':
     '<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3"/>',
   activity: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+  stethoscope:
+    '<path d="M5 3H4a1 1 0 0 0-1 1v4a5 5 0 0 0 10 0V4a1 1 0 0 0-1-1h-1"/><path d="M8 13v1a6 6 0 0 0 12 0v-3"/><circle cx="20" cy="9" r="2"/>',
   'hard-drive':
     '<path d="M22 12H2M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11zM6 16h.01M10 16h.01"/>',
   shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
@@ -31,9 +33,13 @@ export const STROKE = {
   'chevron-left': '<path d="m15 6-6 6 6 6"/>',
   'arrow-left': '<path d="M19 12H5m0 0 6-6m-6 6 6 6"/>',
   'arrow-up-right': '<path d="M7 17 17 7M8 7h9v9"/>',
+  'arrow-up-to-line': '<path d="M5 3h14M18 13l-6-6-6 6M12 7v14"/>',
+  'arrow-down-to-line': '<path d="M12 17V3M6 11l6 6 6-6M19 21H5"/>',
   sort: '<path d="M7 4v16m0 0-3-3m3 3 3-3M17 20V4m0 0-3 3m3-3 3 3"/>',
   trending: '<path d="m22 7-8.5 8.5-5-5L2 17"/><path d="M16 7h6v6"/>',
   eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  'eye-off':
+    '<path d="M9.9 5.2A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4.1M6.6 6.6A17 17 0 0 0 2 12s3.5 7 10 7a9.7 9.7 0 0 0 4.4-1.1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2M3 3l18 18"/>',
   grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
   list: '<path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"/>',
   shuffle: '<path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/>',
@@ -50,6 +56,8 @@ export const STROKE = {
   'play-next': '<path d="M4 6h10M4 12h10M4 18h6"/><path d="M17 9v6M14 12h6"/>',
   moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  'screen-share':
+    '<path d="M13 3H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-3"/><path d="M8 21h8M12 17v4M17 8l5-5M17 3h5v5"/>',
   monitor:
     '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
   mic: '<rect x="9" y="2.5" width="6" height="12" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/>',
@@ -117,6 +125,8 @@ export const STROKE = {
   cookie:
     '<path d="M21 12a9 9 0 1 1-9-9 3 3 0 0 0 4 3 3 3 0 0 0 5 6z"/><path d="M8.5 9.5h.01M12 14h.01M8 15h.01M15 16h.01"/>',
   lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  unlock:
+    '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-2"/>',
   refresh: '<path d="M21 12a9 9 0 1 1-2.6-6.4M21 3v6h-6"/>',
   menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
   'panel-left':
@@ -134,6 +144,8 @@ export const STROKE = {
 }
 
 export const FILLED = {
+  'mic-vocal':
+    '<g transform="rotate(45 12 12)"><path d="M7 3.2a5 5 0 0 1 10 0z"/><path d="M7.2 4.5h9.6l-1 2.6H8.2z"/><path d="M8.6 8.4h6.8l-1.3 11.4H9.9z"/><path d="M10.2 21h3.6l-.4 2.2h-2.8z"/></g><path d="M4.1 19.9c-1.6 1 1 1.8-.8 3.2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>',
   play: '<path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5z"/>',
   pause:
     '<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>',
@@ -145,8 +157,13 @@ export const FILLED = {
     '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 10.7l6.8-4M8.6 13.3l6.8 4" stroke="currentColor" stroke-width="2"/>',
   spotify:
     '<path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm4.6 14.4a.62.62 0 0 1-.86.2c-2.35-1.44-5.3-1.76-8.79-.96a.62.62 0 1 1-.28-1.21c3.81-.87 7.08-.5 9.72 1.11.3.18.39.57.21.86zm1.23-2.73a.78.78 0 0 1-1.07.26c-2.69-1.65-6.79-2.13-9.97-1.16a.78.78 0 0 1-.45-1.49c3.63-1.1 8.15-.57 11.24 1.33.36.22.48.7.25 1.06zm.1-2.85C14.7 8.9 9.38 8.73 6.3 9.66a.94.94 0 1 1-.54-1.8c3.53-1.07 9.4-.86 13.12 1.34a.94.94 0 0 1-.95 1.62z"/>',
+  // Bandcamp's mark: a parallelogram.
+  bandcamp: '<path d="M0 18.75 7.44 5.25H24l-7.44 13.5H0z"/>',
   deezer:
     '<rect x="3" y="14" width="3" height="6" rx="1"/><rect x="8" y="10" width="3" height="10" rx="1"/><rect x="13" y="6" width="3" height="14" rx="1"/><rect x="18" y="2" width="3" height="18" rx="1"/>',
+  // SoundCloud's mark: rising bars beside a cloud.
+  soundcloud:
+    '<rect x="1" y="12" width="1.6" height="5" rx=".8"/><rect x="3.6" y="10" width="1.6" height="7" rx=".8"/><rect x="6.2" y="8.5" width="1.6" height="8.5" rx=".8"/><path d="M9 8.2a6.5 6.5 0 0 1 10.1 2.2A3.3 3.3 0 0 1 19.6 17H9z"/>',
   'apple-music':
     '<path d="M15.8 3.4c.1 1-.3 2-.9 2.7-.6.7-1.6 1.3-2.6 1.2-.1-1 .4-2 1-2.7.6-.7 1.7-1.2 2.5-1.2zM18.9 17c-.5 1.1-.7 1.6-1.3 2.6-.9 1.4-2.1 3.1-3.6 3.1-1.3 0-1.7-.9-3.5-.9s-2.2.9-3.5.8c-1.6 0-2.7-1.5-3.6-2.9-2.5-3.8-2.7-8.3-1.2-10.7 1.1-1.7 2.7-2.7 4.3-2.7 1.6 0 2.6 1 3.9 1 1.3 0 2.1-1 3.9-1 1.4 0 2.9.8 4 2.1-3.5 1.9-2.9 6.9.6 8.6z"/>',
   twitter:

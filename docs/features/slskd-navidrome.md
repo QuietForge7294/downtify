@@ -19,9 +19,12 @@ Both are off by default and configured in **Settings**.
 |--------|-------------|
 | **YouTube Music** | The default. Searches YouTube Music, falling back to standard YouTube when there's no acceptable match — see [How it works](../how-it-works.md#fallback-to-standard-youtube). |
 | **YouTube** | Searches standard YouTube only. |
+| **SoundCloud** | Off by default. Searches SoundCloud, and downloads the exact track of a pasted SoundCloud link — see [SoundCloud](soundcloud.md). |
 | **slskd** | Searches Soulseek through slskd and downloads the best matching file. |
 
 Enabling slskd puts it first in the list. If slskd ends up being the only source, YouTube Music and YouTube are still tried after it, so a track slskd can't find still downloads. The download queue shows which source served each track.
+
+Songs downloaded from the search bar use the result's title, artist and duration to try each source in this same order. The selected YouTube Music video is not pinned, so slskd can supply a different version or a lossless file before YouTube is used as a fallback.
 
 ## slskd
 
@@ -54,15 +57,48 @@ Editing any field clears the last result, since it no longer describes what is i
 
 ### How a track is matched
 
-Downtify searches slskd with the track's title and artist and ranks the results by how well the file name and duration match the track. Among equally good matches it prefers MP3, then FLAC, and it skips files that report a bitrate below 256 kbps. It tries up to five candidates, one after another. When a transfer finishes, Downtify checks the file's tags and duration against the track before keeping it.
+Downtify searches slskd with the track's title and artist and ranks the results by how well the file name and duration match the track. By default, match score comes first; the configured format order only breaks ties. The default order is MP3, then FLAC, and results reporting a bitrate below 256 kbps are skipped. It tries up to five candidates total, one after another. When a transfer finishes, Downtify checks the file's tags and duration against the track before keeping it.
+
+In **Settings → Audio source → slskd**, set **Format priority** to a comma-separated list such as `flac, mp3`. Turn on **Strict format priority** to try each format as a separate tier in that order; matches are still ranked by score within a tier. **Candidate attempts** then applies per format, so `5` tries up to five FLAC files before moving on to up to five MP3 files. In strict mode, **Minimum lossy bitrate** rejects lossy files below the threshold and files that don't report a bitrate; FLAC is exempt.
+
+By default, formats not in the list remain eligible as a final catch-all tier. Turn on **Only allow listed formats** to reject those results instead. This whitelist also works with strict priority disabled, where the normal score-first selection remains unchanged. If all acceptable slskd candidates fail or are exhausted, Downtify continues to the next configured audio source.
+
+For example, `flac, mp3` with strict priority and the whitelist enabled, a minimum lossy bitrate of `320`, and five candidate attempts per format tries FLAC first, then MP3 at 320 kbps or higher. If neither tier succeeds, the next configured provider is tried.
+
+Without strict priority, **Minimum lossy bitrate** still skips files that report a lower bitrate, but files that don't report one are allowed.
+
+**Quality profile** fills in the format list for you: **Default** (`mp3, flac`), **Lossless first** (`flac, mp3`) or **Lossy only** (`mp3, m4a, ogg, opus` with **Only allow listed formats** on). Editing the list afterwards is fine; no profile is highlighted when the list matches none of them.
+
+Turn on **Fine-tune quality and matching** for extra rules. While it is off, the rules below are not used, but their values are kept:
+
+- **Files with no listed bitrate** — **Default** keeps the rule above (rejected only in strict mode with a minimum). **Allow** keeps them in strict mode too; **Reject** skips them everywhere.
+- **Try the highest bitrate first** — among files that pass the match score, tries the highest bitrate first instead of the closest file name.
+- **Minimum bitrate per format** — overrides the minimum for one lossy format, e.g. `192` for `m4a` while MP3 keeps `256`. Blank uses the main minimum.
+- **Maximum bitrate** — skips files above it. `0` turns it off; around `400` skips lossless ALAC hidden in `.m4a` files.
+
+**Candidate attempts**, **Total timeout** and **Queued timeout** also live in this section. They apply whether it is on or off.
 
 If nothing acceptable turns up, the transfer doesn't finish within **Total timeout**, or it sits queued on the remote peer without progress for longer than **Queued timeout**, Downtify moves on to the next audio source.
+
+**Polling and resource use.**
+
+Downtify polls every 5 seconds while the requested transfer exists, and every 60 seconds when it is absent from slskd. An idle transfer can therefore take up to 60 seconds to appear in the queue progress. Timeouts still bound the wait, and cancellation is checked during the idle sleep without additional network requests.
+
+- `DOWNTIFY_POLL_INTERVAL` (default `5`): active interval in seconds (1–30). When unset, the existing `poll_interval_seconds` setting is honored.
+- `DOWNTIFY_POLL_IDLE_INTERVAL` (default `60`): interval when no matching transfer exists, in seconds (1–60).
+- `DOWNTIFY_TRANSFERS_TTL` (default `3`): lifetime of a shared transfer-list snapshot in seconds (0–60); `0` disables caching. Snapshots are isolated by server URL and API credentials, bounded to 32 entries, and invalidated after enqueue. Failed requests are not cached.
+- `DOWNTIFY_POLL_DEEP_SCAN_EVERY` (default `12`): recursive disk lookup every N ticks (1–300) when the transfer is absent. The first tick and ticks with a matching transfer also allow a deep scan. A time limit of 60 seconds between deep scans prevents idle backoff from hiding a finalized file for twelve minutes.
+
+Predictable file locations are probed every tick; throttling affects only recursive fallback searches, including renamed files. The final fallback scan, tag matching, rejected/failed transfer handling and provider fallback remain in place. Backoff does not multiply the existing attempt/time budget. Invalid environment values use the defaults and out-of-range values are bounded.
+
+`httpx` and `httpcore` request logs are restricted to WARNING. `uvicorn.access` is WARNING too, except with `--log-level DEBUG`. Downtify's own progress and failure logs remain available. Counting request log lines is not a reliable measure of HTTP traffic once INFO logs are suppressed: use the slskd-side access log or a counting test client when comparing request rates.
 
 ### Leave files in place
 
 With **Leave slskd files in place** on (the default), the downloaded file stays in the slskd folder: Downtify writes the metadata, cover art and lyrics into it there and registers it in the library under a `slskd/…` path. The Library, player and M3U files use that path, and it's served through `/media/slskd/…`.
 
 Turn it off to copy the file next to your other downloads instead, following your filename template and [file organization](file-organization.md) settings.
+After the copy is tagged and verified as readable audio, Downtify removes the original from the configured slskd source folder. If copying, tagging or verification fails, the source is kept and the download reports an error. If removing the source fails, the imported library file remains successful and Downtify logs a warning with both paths. When the source and destination are the same file, or the source is outside the configured folder, it is not removed. Existing leftovers and failed cleanups are counted as [slskd working copies](storage-usage.md#the-library-not-its-working-copies).
 
 ::: info
 slskd files keep their original format — they aren't transcoded to the format chosen in Settings.
@@ -109,6 +145,8 @@ With **Create playlists in Navidrome** on, Downtify creates (or updates) a Navid
 - tracks are deleted from the Library, or [library paths are fixed](library-catalog.md#fix-library-paths).
 
 Tracks are matched to Navidrome songs by path first, then by tags. **Make Navidrome playlists public** controls the playlist's visibility in Navidrome.
+
+Navidrome also imports every M3U file in its music folder as a playlist of its own (with the cover beside it), so with both on, each playlist appears twice. Turn on **Let Navidrome import the M3U playlists** to keep only Navidrome's import: Downtify then has Navidrome rescan instead of creating a playlist, and removes the copy it created earlier. **Settings → Doctor** finds and removes the existing duplicates.
 
 ::: warning Files whose tags don't match the playlist are deleted
 When a playlist is refreshed (after deletes, **Fix library paths**, or **Download missing** on an already complete playlist), a library file registered for a Spotify track is **deleted from disk** if its embedded title/artist clearly don't match that track — Downtify treats it as a wrong download. Keep this in mind if you edit tags by hand.

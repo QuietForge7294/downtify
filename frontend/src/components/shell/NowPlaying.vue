@@ -8,25 +8,20 @@
         aria-modal="true"
         :aria-label="t('player.nowPlaying')"
       >
-        <!-- Backdrop: the artwork, blown up and blurred. -->
-        <div class="pointer-events-none absolute inset-0" aria-hidden="true">
-          <div
-            class="absolute inset-0 transition-colors duration-700"
-            :style="{ backgroundColor: tint }"
-          />
-          <img
-            v-if="track.hasCover"
-            :src="track.cover"
-            alt=""
-            class="absolute inset-0 size-full scale-125 object-cover opacity-55 blur-[90px] saturate-150"
-          />
-          <div
-            class="absolute inset-0 bg-gradient-to-b from-black/25 via-black/45 to-black/80"
-          />
-        </div>
+        <NowPlayingBackdrop
+          :track="track"
+          :palette="palette"
+          :karaoke="isKaraoke"
+          :playing="player.isPlaying.value"
+        />
 
         <div
-          class="relative flex h-full flex-col px-5 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1.25rem,env(safe-area-inset-bottom))] lg:px-10 lg:pt-6 lg:pb-8"
+          class="relative flex h-full flex-col px-5 lg:px-10"
+          :class="
+            isKaraoke
+              ? 'pt-[max(0.5rem,env(safe-area-inset-top))] pb-[max(0.5rem,env(safe-area-inset-bottom))] lg:pt-3 lg:pb-2'
+              : 'pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1.25rem,env(safe-area-inset-bottom))] lg:pt-6 lg:pb-8'
+          "
         >
           <!-- Header -->
           <header class="relative z-10 flex h-12 shrink-0 items-center gap-3">
@@ -39,19 +34,81 @@
             >
               <AppIcon name="chevron-down" :size="22" />
             </button>
+            <!-- Karaoke gives the body to the words: what's playing moves
+                 up here, instead of the "Playing from" label. -->
+            <div
+              v-if="isKaraoke"
+              class="flex min-w-0 flex-1 items-center gap-3"
+            >
+              <CoverArt
+                :src="track.hasCover ? track.cover : ''"
+                :name="track.album || track.title"
+                rounded="rounded-[9px]"
+                :letter-size="18"
+                :icon-size="20"
+                class="size-11 shrink-0"
+              />
+              <NowPlayingTrackInfo
+                :track="track"
+                compact
+                @navigate="nowPlaying.close()"
+              />
+              <LikeButton :file="track.file" size="lg" />
+              <span
+                v-if="player.playError.value"
+                class="flex shrink-0 items-center gap-2 text-sm text-danger"
+                :title="t('player.cannotPlay')"
+              >
+                <AppIcon name="alert" :size="16" />
+                <span class="max-xl:sr-only">{{ t('player.cannotPlay') }}</span>
+              </span>
+            </div>
             <component
+              v-else
               :is="contextRoute ? RouterLink : 'div'"
               :to="contextRoute || undefined"
-              class="flex min-w-0 flex-col max-lg:flex-1 max-lg:items-center"
+              class="flex min-w-0 items-center gap-2 max-lg:flex-1 max-lg:justify-center"
               @click="contextRoute && nowPlaying.close()"
             >
-              <span class="eyebrow !text-white/55">{{ contextLabel }}</span>
-              <span class="max-w-full truncate text-sm font-semibold">{{
-                contextTitle
-              }}</span>
+              <CoverArt
+                v-if="
+                  context?.type === 'playlist' &&
+                  (context.cover || context.covers?.length)
+                "
+                :src="context.cover || ''"
+                :covers="context.covers || []"
+                :name="context.title"
+                rounded="rounded-[5px]"
+                :letter-size="10"
+                :icon-size="12"
+                class="size-8 shrink-0"
+              />
+              <span class="flex min-w-0 flex-col">
+                <span class="eyebrow !text-white/55">{{ contextLabel }}</span>
+                <span class="max-w-full truncate text-sm font-semibold">{{
+                  contextTitle
+                }}</span>
+              </span>
             </component>
+            <KaraokeUpNext
+              v-if="isKaraoke && nextTrack"
+              :track="nextTrack"
+              class="hidden xl:block"
+            />
+            <button
+              v-if="isKaraoke"
+              type="button"
+              class="hidden size-10 shrink-0 items-center justify-center rounded-full bg-white/10 transition-colors hover:bg-white/20 lg:flex"
+              :class="{ 'text-accent': karaokeStage.connected.value }"
+              :aria-label="t('player.karaokeWindow')"
+              :title="t('player.karaokeWindow')"
+              @click="openKaraokeWindow"
+            >
+              <AppIcon name="screen-share" :size="20" />
+            </button>
             <div
-              class="ml-auto hidden gap-1 rounded-[12px] bg-white/8 p-1 lg:flex"
+              class="ml-auto hidden gap-1 rounded-[12px] p-1 lg:flex"
+              :class="isKaraoke ? 'bg-black/40' : 'bg-white/8'"
               role="tablist"
             >
               <button
@@ -90,14 +147,20 @@
 
           <!-- Body -->
           <div
-            class="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)] gap-6 overflow-hidden py-4 lg:grid-cols-[auto_minmax(0,1fr)] lg:items-stretch lg:gap-10 lg:py-4 xl:grid-cols-[auto_minmax(0,1fr)_minmax(220px,340px)] xl:gap-12"
+            class="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)] overflow-hidden"
+            :class="
+              isKaraoke
+                ? 'grid-rows-[minmax(0,1fr)] py-1'
+                : 'gap-6 py-4 lg:grid-cols-[auto_minmax(0,1fr)] lg:items-stretch lg:gap-10 lg:py-4 xl:grid-cols-[auto_minmax(0,1fr)_minmax(220px,340px)] xl:gap-12'
+            "
           >
             <!-- Artwork + title (hidden on phones while a panel is open) -->
             <div
+              v-if="!isKaraoke"
               class="now-playing-stage flex h-full min-h-0 w-full min-w-0 max-w-full flex-col justify-center gap-4 overflow-hidden lg:gap-5"
               :class="mobilePanel ? 'max-lg:hidden' : ''"
             >
-              <div class="now-playing-cover mx-auto">
+              <div class="now-playing-cover relative mx-auto">
                 <CoverArt
                   :src="track.hasCover ? track.cover : ''"
                   :name="track.album || track.title"
@@ -107,25 +170,29 @@
                   class="aspect-square w-full min-h-0 min-w-0 transition-transform duration-500 ease-out-soft"
                   :class="player.isPlaying.value ? 'scale-100' : 'scale-[0.94]'"
                 />
+                <CoverArt
+                  v-if="
+                    player.dj.value?.next && player.dj.value.transition !== null
+                  "
+                  :src="
+                    player.dj.value.next.hasCover
+                      ? player.dj.value.next.cover
+                      : ''
+                  "
+                  :name="player.dj.value.next.title"
+                  rounded="rounded-[20px]"
+                  class="pointer-events-none absolute inset-0 aspect-square w-full motion-reduce:transition-none"
+                  :style="{ opacity: player.dj.value.transition }"
+                />
               </div>
               <div
                 class="flex w-full min-w-0 shrink-0 items-end justify-between gap-4"
               >
-                <div class="min-w-0 flex-1">
-                  <h2 class="now-playing-title text-display truncate font-bold">
-                    {{ track.title }}
-                  </h2>
-                  <RouterLink
-                    v-if="track.albumArtist && !track.isPodcast"
-                    :to="{ name: 'Artist', query: { name: track.albumArtist } }"
-                    class="mt-1 block truncate text-base text-white/70 hover:text-white hover:underline"
-                    @click="nowPlaying.close()"
-                    >{{ track.artist }}</RouterLink
-                  >
-                  <p v-else class="mt-1 truncate text-base text-white/70">
-                    {{ track.artist }}
-                  </p>
-                </div>
+                <NowPlayingTrackInfo
+                  :track="track"
+                  class="flex-1"
+                  @navigate="nowPlaying.close()"
+                />
                 <div class="flex shrink-0 items-center gap-1">
                   <LikeButton
                     v-if="!track?.isPodcast && !track?.stream"
@@ -162,7 +229,12 @@
               class="min-h-0 lg:h-full"
               :class="mobilePanel ? '' : 'max-lg:hidden'"
             >
-              <LyricsPanel v-if="panel === 'lyrics'" :compact="isMobile" />
+              <LyricsPanel
+                v-if="panel === 'lyrics' || isKaraoke"
+                :compact="isMobile"
+                :karaoke="isKaraoke"
+                :player="player"
+              />
               <UpNextPanel v-else-if="panel === 'queue'" />
               <TrackDetails v-else-if="panel === 'details'" class="lg:pt-10" />
               <EqualizerPanel
@@ -173,7 +245,7 @@
 
             <!-- Up next always visible on wide screens -->
             <aside
-              v-if="panel !== 'queue'"
+              v-if="panel !== 'queue' && !isKaraoke"
               class="hidden h-full min-h-0 max-h-full rounded-panel border border-white/10 bg-white/6 p-3 backdrop-blur-xl xl:block"
             >
               <UpNextPanel />
@@ -181,12 +253,16 @@
           </div>
 
           <!-- Transport -->
-          <footer class="relative z-10 shrink-0">
-            <div class="flex items-center gap-3">
+          <footer
+            class="relative z-10 shrink-0"
+            :class="{ 'now-playing-footer--karaoke': isKaraoke }"
+          >
+            <div class="now-playing-seek flex items-center gap-3">
               <span class="tabular w-12 text-xs text-white/65">{{
                 formatDuration(scrub ?? player.currentTime.value)
               }}</span>
               <WaveSeekBar
+                v-if="!player.dj.value || player.dj.value.mode === 'prepared'"
                 class="flex-1"
                 :model-value="scrub ?? player.currentTime.value"
                 :max="player.duration.value || 1"
@@ -197,13 +273,22 @@
                 @update:model-value="(v) => (scrub = v)"
                 @commit="commitSeek"
               />
+              <progress
+                v-else
+                class="h-1 flex-1 accent-violet-400"
+                :value="player.currentTime.value"
+                :max="player.duration.value || 1"
+                aria-label="Progression du titre DJ"
+              />
               <span class="tabular w-12 text-right text-xs text-white/65">{{
                 formatDuration(player.duration.value)
               }}</span>
             </div>
 
-            <div class="mt-3 flex items-center lg:mt-4">
-              <div class="hidden flex-1 items-center gap-2 lg:flex">
+            <div class="now-playing-transport mt-3 flex items-center lg:mt-4">
+              <div
+                class="now-playing-file hidden flex-1 items-center gap-2 lg:flex"
+              >
                 <span
                   v-if="track.format"
                   class="rounded-md border border-white/20 px-1.5 py-0.5 text-[11px] font-semibold tracking-wide text-white/75"
@@ -215,7 +300,7 @@
               </div>
 
               <div
-                class="flex flex-1 items-center justify-between lg:flex-none lg:justify-center lg:gap-7"
+                class="now-playing-controls flex flex-1 items-center justify-between lg:flex-none lg:justify-center lg:gap-7"
               >
                 <button
                   v-if="track?.isPodcast"
@@ -229,15 +314,22 @@
                 <!-- Left of shuffle: tracks like this one
                      (podcasts have none). -->
                 <button
-                  v-if="similarArtist && similarTitle"
+                  v-if="
+                    similarArtist &&
+                    similarTitle &&
+                    mixAvailable &&
+                    !track?.stream
+                  "
                   type="button"
                   class="flex size-11 items-center justify-center rounded-full text-white/80 transition-colors hover:bg-white/10"
-                  :aria-label="t('similar.findSimilar')"
+                  aria-label="Lancer un mix à partir de ce titre"
+                  :disabled="songMixLoading"
                   @click="goSimilar"
                 >
                   <AppIcon name="wand" :size="22" />
                 </button>
                 <button
+                  v-if="!player.dj.value"
                   type="button"
                   class="flex size-11 items-center justify-center rounded-full transition-colors hover:bg-white/10"
                   :class="
@@ -250,6 +342,7 @@
                   <AppIcon name="shuffle" :size="22" />
                 </button>
                 <button
+                  :disabled="Boolean(player.dj.value)"
                   type="button"
                   class="flex size-13 items-center justify-center rounded-full hover:bg-white/10"
                   :aria-label="t('player.previous')"
@@ -290,7 +383,7 @@
                   <AppIcon name="skip-forward" :size="22" />
                 </button>
                 <button
-                  v-else
+                  v-else-if="!player.dj.value"
                   type="button"
                   class="relative flex size-11 items-center justify-center rounded-full transition-colors hover:bg-white/10"
                   :class="
@@ -337,7 +430,9 @@
                 </span>
               </div>
 
-              <div class="hidden flex-1 items-center justify-end gap-2 lg:flex">
+              <div
+                class="now-playing-extras hidden flex-1 items-center justify-end gap-2 lg:flex"
+              >
                 <UiMenu
                   v-if="track?.isPodcast"
                   :items="speedMenu"
@@ -382,7 +477,9 @@
             </div>
 
             <!-- Phone extras -->
-            <div class="mt-4 flex items-center justify-between lg:hidden">
+            <div
+              class="now-playing-phone-extras mt-4 flex items-center justify-between lg:hidden"
+            >
               <div class="flex items-center gap-1">
                 <UiMenu
                   v-if="track?.isPodcast"
@@ -438,7 +535,16 @@
                   @click="toggleMobilePanel(tab.id)"
                 >
                   <AppIcon :name="tab.icon" :size="16" />
-                  <span class="max-xs:sr-only">{{ tab.label }}</span>
+                  <!-- Five tabs don't fit with every label: only the open
+                       one keeps it on narrow screens. -->
+                  <span
+                    :class="
+                      panel === tab.id && mobilePanel
+                        ? 'max-xs:sr-only'
+                        : 'max-md:sr-only'
+                    "
+                    >{{ tab.label }}</span
+                  >
                 </button>
               </div>
             </div>
@@ -462,18 +568,27 @@ import LikeButton from '../player/LikeButton.vue'
 import LyricsPanel from '../player/LyricsPanel.vue'
 import UpNextPanel from '../player/UpNextPanel.vue'
 import TrackDetails from '../player/TrackDetails.vue'
+import NowPlayingTrackInfo from '../player/NowPlayingTrackInfo.vue'
 import EqualizerPanel from '../player/EqualizerPanel.vue'
+import KaraokeUpNext from '../player/KaraokeUpNext.vue'
+import NowPlayingBackdrop from '../player/NowPlayingBackdrop.vue'
 import { usePlayer } from '/src/model/player'
+import { useKaraokeStage } from '/src/model/karaokeStage'
 import { useDownloadManager, useProgressTracker } from '/src/model/download'
 import { useLibrary } from '/src/model/library'
 import { useUi } from '/src/model/ui'
 import { usePlayerPrefs } from '/src/model/playerPrefs'
 import { useNowPlaying } from '/src/model/ui'
-import { formatBytes, formatDuration, hueFor } from '/src/lib/format'
+import { formatBytes, formatDuration } from '/src/lib/format'
 import { availablePanels, defaultPanel, requestedPanel } from '/src/lib/panels'
 import { useCoverPalette } from '/src/model/coverPalette'
+import { groupingArtistName } from '/src/lib/library'
 import { saveName } from '/src/lib/paths'
+import { useBuyLinks } from '/src/model/buyLinks'
+import { buyTargetForTrack } from '/src/lib/buyLinks'
 import { useI18n } from '/src/i18n'
+import { startSongMix, mixAvailable, songMixLoading } from '/src/model/songMix'
+import { djController } from '/src/model/djController'
 
 const player = usePlayer()
 const library = useLibrary()
@@ -482,6 +597,7 @@ const tracker = useProgressTracker()
 const ui = useUi()
 const { showLyrics } = usePlayerPrefs()
 const nowPlaying = useNowPlaying()
+const buyLinks = useBuyLinks()
 const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
@@ -502,24 +618,13 @@ const similarTitle = computed(
 )
 
 function goSimilar() {
-  const artist = (
-    (track.value?.artists || [])[0] ||
-    track.value?.artist ||
-    ''
-  ).trim()
-  const title = (track.value?.name || track.value?.title || '').trim()
-  if (!artist || !title) return
-  router.push({ name: 'Similar', query: { artist, track: title } })
+  return startSongMix(track.value)
 }
 const palette = useCoverPalette(track)
-const tint = computed(
-  () =>
-    palette.value?.background ||
-    `oklch(0.3 0.06 ${hueFor(track.value?.album || track.value?.title)})`
-)
 
 const PANEL_TABS = {
   lyrics: { icon: 'lyrics', label: 'player.lyrics' },
+  karaoke: { icon: 'mic-vocal', label: 'player.karaoke' },
   queue: { icon: 'queue', label: 'player.upNext' },
   details: { icon: 'info', label: 'player.details' },
   equalizer: { icon: 'equalizer', label: 'player.equalizer' },
@@ -554,6 +659,15 @@ const panel = computed(
     })
 )
 const mobilePanel = computed(() => isMobile.value && !!requested.value)
+const isKaraoke = computed(() => panel.value === 'karaoke')
+const nextTrack = computed(() => player.upcoming.value[0]?.track || null)
+const karaokeStage = useKaraokeStage()
+
+// The words go to the other screen; this one is free to pick the next song.
+function openKaraokeWindow() {
+  if (karaokeStage.open()) nowPlaying.close()
+  else ui.toast(t('player.karaokeWindowBlocked'), { kind: 'error' })
+}
 
 function setPanel(id) {
   router.replace({ query: { ...route.query, panel: id } })
@@ -607,8 +721,9 @@ const speedMenu = computed(() =>
 
 const sleepMenu = computed(() => [
   { heading: t('player.sleepTimer') },
-  ...[15, 30, 45, 60, 90].map((minutes) => ({
-    label: t('player.sleepMinutes', { count: minutes }),
+  ...[5, 10, 20, 30, 45, 60].map((minutes) => ({
+    label:
+      minutes === 60 ? '1 h' : t('player.sleepMinutes', { count: minutes }),
     action: () => player.setSleepTimer(minutes),
   })),
   {
@@ -630,6 +745,27 @@ const trackMenu = computed(() => {
   if (!tr) return []
   return [
     {
+      label: 'Lancer un mix à partir de ce titre',
+      icon: 'wand',
+      hidden: !mixAvailable.value || !tr.file || tr.stream || tr.isPodcast,
+      disabled: songMixLoading.value,
+      action: () => startSongMix(tr),
+    },
+    {
+      label: 'Lancer un mix DJ à partir de ce titre',
+      icon: 'wand',
+      hidden:
+        !mixAvailable.value ||
+        !djController.available.value ||
+        !tr.file ||
+        tr.stream ||
+        tr.isPodcast,
+      action: () => {
+        navigate({ name: 'MusicDJ' })
+        return djController.startSeed(tr)
+      },
+    },
+    {
       label: t('player.goToAlbum'),
       icon: 'disc',
       hidden: !tr.album || tr.isPodcast,
@@ -642,9 +778,15 @@ const trackMenu = computed(() => {
     {
       label: t('player.goToArtist'),
       icon: 'user',
-      hidden: !tr.albumArtist || tr.isPodcast,
+      hidden: !groupingArtistName(tr) || tr.isPodcast,
       action: () =>
-        navigate({ name: 'Artist', query: { name: tr.albumArtist } }),
+        navigate({ name: 'Artist', query: { name: groupingArtistName(tr) } }),
+    },
+    {
+      label: t('buy.menu'),
+      icon: 'tag',
+      hidden: !tr.artist || tr.isPodcast,
+      action: () => buyLinks.open(buyTargetForTrack(tr)),
     },
     {
       label: t('library.saveToDevice'),

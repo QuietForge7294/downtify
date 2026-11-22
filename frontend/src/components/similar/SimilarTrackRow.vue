@@ -54,7 +54,12 @@
          from this track, then the download state. Wide enough for the
          wand plus the download's widest state (see TrackDownPlay). -->
     <div class="flex w-40 shrink-0 items-center justify-end gap-2">
-      <SimilarButton :artist="firstArtist" :title="song.name" filled />
+      <SimilarButton
+        :artist="firstArtist"
+        :title="song.name"
+        :file="song.file || ''"
+        filled
+      />
       <UiBadge v-if="inLibrary" tone="accent" icon="check">
         {{ t('search.inLibrary') }}
       </UiBadge>
@@ -139,8 +144,10 @@ const overlayIcon = computed(() =>
   play.isCurrent.value && player.isPlaying.value ? 'pause' : 'play'
 )
 
-const inLibrary = computed(() =>
-  library.hasSong(artistName.value, props.song.name)
+const inLibrary = computed(
+  () =>
+    (props.song.source === 'library' && !!props.song.file) ||
+    library.hasSong(artistName.value, props.song.name)
 )
 
 // Every row already is a downloadable song (video id + link).

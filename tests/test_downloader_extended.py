@@ -16,6 +16,7 @@ from mutagen.id3 import ID3
 from yt_dlp.postprocessor.ffmpeg import FFmpegExtractAudioPP
 
 from downtify import downloader as downloader_mod
+from downtify.cookies import CookiesStore
 from downtify.downloader import (
     Downloader,
     _album_artist_for_tags,
@@ -348,13 +349,15 @@ def test_artist_subdir_falls_back_to_track_artists_when_album_artist_blank():
 
 def test_album_artist_keeps_duo_name_with_ampersand():
     # A single credited name with "&" is the act, not a compilation.
-    assert _album_artist_for_tags(['Zé Neto & Cristiano']) == (
+    assert _album_artist_for_tags({'artists': ['Zé Neto & Cristiano']}) == (
         'Zé Neto & Cristiano'
     )
-    assert _album_artist_for_tags(['Ana Luz', 'Kenji Aoki']) == (
-        'Various Artists'
+    # Several credited artists aren't a compilation either: only the
+    # source says so (`compilation`, see album_artist.py).
+    assert _album_artist_for_tags({'artists': ['Ana Luz', 'Kenji Aoki']}) == (
+        'Ana Luz'
     )
-    assert _album_artist_for_tags([]) is None
+    assert _album_artist_for_tags({'artists': []}) is None
 
 
 # ── organize_by_artist – existing_filename_for ────────────────────────────────
@@ -1001,6 +1004,59 @@ def test_existing_filename_for_fallback_handles_glob_characters(tmp_path):
     assert d.existing_filename_for(song) == 'Artist - Song [Live].mp3'
 
 
+_NETSCAPE_COOKIES = (
+    '# Netscape HTTP Cookie File\n'
+    '.youtube.com\tTRUE\t/\tTRUE\t1800000000\tSID\tsome-session-value\n'
+).encode()
+
+
+def test_fetch_audio_does_not_write_back_to_shared_cookie_file(
+    tmp_path, monkeypatch
+):
+    # yt-dlp rewrites `cookiefile` on exit (truncate then write). Several
+    # downloads from one playlist share a single cookies.txt, so a
+    # concurrent reader used to hit the half-written file and fail with
+    # "does not look like a Netscape format cookies file". fetch_audio
+    # must hand yt-dlp a private copy so the shared file is never the one
+    # being rewritten (henriquesebastiao/downtify#570).
+    shared = tmp_path / 'cookies.txt'
+    shared.write_bytes(_NETSCAPE_COOKIES)
+    store = CookiesStore(shared)
+    seen = {}
+
+    class _SaveBackYoutubeDL:
+        def __init__(self, opts):
+            self.opts = opts
+            self.params = opts
+            seen['cookiefile'] = opts.get('cookiefile')
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            # Mimic yt_dlp.YoutubeDL.save_cookies(): rewrite cookiefile.
+            Path(self.opts['cookiefile']).write_bytes(b'rewritten by yt-dlp')
+            return False
+
+        def add_post_processor(self, pp, when='post_process'):
+            pass
+
+        def download(self, urls):
+            _minimal_mp3(Path(self.opts['outtmpl'].replace('%(ext)s', 'mp3')))
+
+    monkeypatch.setattr(downloader_mod.yt_dlp, 'YoutubeDL', _SaveBackYoutubeDL)
+    d = _make(tmp_path / 'downloads', cookies_store=store)
+    d.fetch_audio(
+        'abc123def45',
+        tmp_path / 'downloads',
+        'Artist - Song',
+        song={'name': 'Song', 'artists': ['Artist']},
+    )
+
+    assert seen['cookiefile'] != str(shared)
+    assert shared.read_bytes() == _NETSCAPE_COOKIES
+
+
 def test_download_ydl_opts_enables_remote_ejs_component(tmp_path, monkeypatch):
     """Without `remote_components: ['ejs:github']`, yt-dlp refuses to
     fetch the EJS challenge-solver script even when a JS runtime is
@@ -1091,6 +1147,48 @@ def test_download_registers_bitrate_aware_extract_audio_pp(
     assert when == 'post_process'
     assert pp._codec == 'm4a'
     assert pp._bitrate_bps == 320_000
+
+
+def test_original_format_uses_best_available_audio_without_bitrate_encoding(
+    tmp_path, monkeypatch
+):
+    _FakeYoutubeDL.captured = {}
+    _FakeYoutubeDL.post_processors = []
+    monkeypatch.setattr(downloader_mod.yt_dlp, 'YoutubeDL', _FakeYoutubeDL)
+    d = _make(tmp_path, audio_format='original', audio_bitrate='320')
+    try:
+        d.fetch_audio('video-id', tmp_path, 'Song', song=_OVERWRITE_SONG)
+    except _CapturedOpts:
+        pass
+
+    [(pp, when)] = _FakeYoutubeDL.post_processors
+    assert isinstance(pp, _ExtractAudioPP)
+    assert when == 'post_process'
+    assert pp._codec == 'best'
+    assert pp._bitrate_bps is None
+
+
+def test_original_format_remuxes_webm_opus_without_encoding(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / 'Song.webm'
+    source.write_bytes(b'webm')
+    pp = _ExtractAudioPP(yt_dlp.YoutubeDL({'quiet': True}), 'best', '')
+    monkeypatch.setattr(pp, 'get_audio_codec', lambda path: 'opus')
+    calls = []
+
+    def run_ffmpeg(path, target, codec, options):
+        calls.append((codec, options))
+        Path(target).write_bytes(b'opus')
+
+    monkeypatch.setattr(pp, 'run_ffmpeg', run_ffmpeg)
+    info = {'filepath': str(source), 'ext': 'webm'}
+
+    pp.run(info)
+
+    assert calls[0][0] == 'copy'
+    assert info['ext'] == 'opus'
+    assert Path(info['filepath']).read_bytes() == b'opus'
 
 
 def test_extract_audio_pp_maps_ogg_to_vorbis():
@@ -1271,3 +1369,15 @@ def test_extract_audio_pp_ogg_produces_vorbis(tmp_path):
     assert info['filepath'].endswith('.ogg')
     codec, _ = _probe_audio(info['filepath'])
     assert codec == 'vorbis'
+
+
+def test_expected_stem_for_matches_existing_filename_for(tmp_path):
+    d = _make(tmp_path, audio_format='flac')
+    (tmp_path / 'Mix').mkdir()
+    (tmp_path / 'Mix' / 'Artist - Song.mp3').write_bytes(b'x')
+
+    found = d.existing_filename_for(_OVERWRITE_SONG, subdir='Mix')
+    stem = d.expected_stem_for(_OVERWRITE_SONG, subdir='Mix')
+
+    assert found == 'Mix/Artist - Song.mp3'
+    assert found.rpartition('.')[0] == stem

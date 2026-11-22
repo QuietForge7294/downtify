@@ -26,7 +26,11 @@ from .auth import SIGNED_URL_DEFAULT_TTL, SIGNED_URL_MAX_TTL, Principal
 from .cover_thumbs import normalize_size
 from .library_catalog import list_library_entries, resolve_library_file
 from .library_paths_cache import invalidate_library_paths_cache
+from .likes import content_key_for
 from .lyrics import read_track_lyrics
+from .manual_playlists import MAX_TRACKS_PER_EDIT, ManualPlaylistError
+from .metadata_edit import edit_file, validate_changes
+from .mobile_track_ids import resolve_mobile_track_ids
 from .transcode import (
     FORMATS,
     TranscodeError,
@@ -52,7 +56,9 @@ def _refresh() -> int:
     return _sync().refresh(list_library_entries(api.library_context()))
 
 
-def _track_path(track_id: str) -> tuple[dict[str, Any], Path]:
+def _track_path(
+    track_id: str, request: Request
+) -> tuple[dict[str, Any], Path]:
     """A track's row and file, or 404."""
 
     sync = _sync()
@@ -61,6 +67,28 @@ def _track_path(track_id: str) -> tuple[dict[str, Any], Path]:
         _refresh()
         row = sync.row_for(track_id)
     if row is None:
+        raise HTTPException(status_code=404, detail='Track not found')
+    principal = api.principal_of(request)
+    visibility_request = request
+    if principal is not None and principal.kind == 'signed' and api.state.auth:
+        device = api.state.auth.get_device(principal.device_id)
+        if device is None or device.get('revoked_at'):
+            raise HTTPException(status_code=404, detail='Track not found')
+        user_id = int(device.get('user_id') or 0)
+        user = api.state.auth.users.get(user_id)
+        if user is None:
+            raise HTTPException(status_code=404, detail='Track not found')
+        state = dict(request.scope.get('state') or {})
+        state['principal'] = Principal(
+            'signed',
+            principal.scope,
+            principal.device_id,
+            user_id,
+            device.get('username') or user.get('username') or '',
+            user.get('role') or '',
+        )
+        visibility_request = Request({**request.scope, 'state': state})
+    if not api.filter_paths_for_request([row['file']], visibility_request):
         raise HTTPException(status_code=404, detail='Track not found')
     full = resolve_library_file(row['file'], api.library_context())
     if full is None:
@@ -108,41 +136,475 @@ async def library(
 
 
 @router.get('/tracks/{track_id}')
-def track(track_id: str) -> dict[str, Any]:
-    row, _full = _track_path(track_id)
+def track(track_id: str, request: Request) -> dict[str, Any]:
+    row, _full = _track_path(track_id, request)
     return row
 
 
 @router.get('/tracks/{track_id}/lyrics')
-def track_lyrics(track_id: str) -> dict[str, Any]:
+def track_lyrics(track_id: str, request: Request) -> dict[str, Any]:
     """``{synced, plain}``: the ``.lrc`` sidecar and the embedded lyrics."""
 
-    _row, full = _track_path(track_id)
+    _row, full = _track_path(track_id, request)
     return read_track_lyrics(full)
 
 
 @router.get('/playlists')
 async def playlists(request: Request) -> list[dict[str, Any]]:
-    """Downloaded playlists as ``{name, liked, count, track_ids, cover}``
-    - ``cover`` is a path for ``GET /playlist-cover?file=`` or ``''``.
+    """Downloaded playlists as ``{name, liked, manual, count, track_ids,
+    cover, owner, visibility, mine, followed, can_edit_tracks,
+    shared_with_me, new, hidden_count}`` - ``cover`` is a path for
+    ``GET /playlist-cover?file=`` or ``''``; ``hidden_count`` is how many
+    songs the owner hid from an imported playlist (``0`` for everything
+    else).
+
     A user sees their own playlists (and their own liked songs as the
-    liked one) only."""
+    liked one), those shared with them (``shared_with_me``; ``new`` until
+    opened) and public ones: the ones they follow, and - unless they
+    switched *Show public playlists* off - the rest. ``mine`` says whether
+    it is theirs to change, ``can_edit_tracks`` whether they may add and
+    remove its songs (a Library playlist of theirs, or one shared with
+    them as an editor), ``owner`` is the owner's username and
+    ``visibility`` is ``private``, ``shared`` or ``public``. Own playlists
+    also list ``shared_with`` and ``editors`` (usernames).
+    """
 
     await asyncio.to_thread(_refresh)
     found = await asyncio.to_thread(api.playlists_for_request, request)
     paths = [f for p in found for f in p['files']]
-    ids = await asyncio.to_thread(_sync().ids_for_paths, paths)
+    visible = set(
+        await asyncio.to_thread(api.filter_paths_for_request, paths, request)
+    )
+    ids = await asyncio.to_thread(_sync().ids_for_paths, visible)
     return [
         {
             'name': p['name'],
+            'display_name': p.get('display_name', p['name']),
             'liked': p['liked'],
             'manual': bool(p.get('manual')),
-            'count': p['count'],
+            'count': sum(f in visible for f in p['files']),
             'cover': p['cover'],
-            'track_ids': [ids[f] for f in p['files'] if f in ids],
+            'track_ids': [
+                ids[f] for f in p['files'] if f in visible and f in ids
+            ],
+            'owner': p.get('owner', ''),
+            'visibility': p.get('visibility', 'private'),
+            'mine': bool(p.get('mine', True)),
+            'followed': bool(p.get('followed')),
+            'can_edit_tracks': bool(p.get('can_edit_tracks')),
+            'favorite': bool(p.get('favorite')),
+            'shared_with_me': bool(p.get('shared_with_me')),
+            'new': bool(p.get('new')),
+            'hidden_count': int(p.get('hidden_count') or 0),
+            **(
+                {'shared_with': p['shared_with']}
+                if p.get('shared_with')
+                else {}
+            ),
+            **({'editors': p['editors']} if p.get('editors') else {}),
         }
         for p in found
     ]
+
+
+def _require_playlist_writer(request: Request) -> None:
+    if not api.request_user_id(request) and not api.request_is_admin(request):
+        raise HTTPException(status_code=401, detail='Sign in required')
+
+
+async def _mobile_playlist_result(
+    result: dict[str, Any], request: Request
+) -> dict[str, Any]:
+    files = list(result.get('files') or [])
+    files = await asyncio.to_thread(
+        api.filter_paths_for_request, files, request
+    )
+    ids = await asyncio.to_thread(_sync().ids_for_paths, files)
+    response = {
+        'name': str(result.get('name') or ''),
+        'manual': bool(result.get('manual')),
+        'count': len(files),
+        'track_ids': [ids[file] for file in files if file in ids],
+    }
+    for key in ('added', 'removed', 'already'):
+        if key in result:
+            value = result[key]
+            if key == 'already':
+                visible = await asyncio.to_thread(
+                    api.filter_paths_for_request, value, request
+                )
+                response[key] = [ids[file] for file in visible if file in ids]
+            else:
+                response[key] = value
+    return response
+
+
+@router.post('/playlists')
+async def create_mobile_playlist(request: Request) -> dict[str, Any]:
+    _require_playlist_writer(request)
+    _sync()
+    payload = await api._json_object(request)
+    name = payload.get('name')
+    if not isinstance(name, str) or not name.strip():
+        raise HTTPException(status_code=400, detail='name is required')
+    result = await api.create_library_playlist_endpoint(request)
+    await api.announce_playlists_changed()
+    return await _mobile_playlist_result(result, request)
+
+
+@router.post('/playlists/rename')
+async def rename_mobile_playlist(request: Request) -> dict[str, Any]:
+    _require_playlist_writer(request)
+    _sync()
+    payload = await api._json_object(request)
+    name, new_name = payload.get('name'), payload.get('new_name')
+    if (
+        not isinstance(name, str)
+        or not name.strip()
+        or not isinstance(new_name, str)
+        or not new_name.strip()
+    ):
+        raise HTTPException(
+            status_code=400, detail='name and new_name are required'
+        )
+    entry = api.require_playlist_visible(name.strip(), request, manage=True)
+    if not entry.get('manual'):
+        raise HTTPException(
+            status_code=403, detail='Only a Library playlist can be renamed'
+        )
+    result = await api.rename_library_playlist_endpoint(request)
+    out = await _mobile_playlist_result(result, request)
+    out['previous'] = entry['name']
+    return out
+
+
+@router.post('/playlists/tracks')
+async def edit_mobile_playlist_tracks(request: Request) -> dict[str, Any]:
+    _require_playlist_writer(request)
+    _sync()
+    payload = await api._json_object(request)
+    name = payload.get('name')
+    if not isinstance(name, str) or not name.strip():
+        raise HTTPException(status_code=400, detail='name is required')
+    groups: dict[str, list[Any]] = {}
+    for key in ('add', 'remove'):
+        if key in payload and not isinstance(payload[key], list):
+            raise HTTPException(
+                status_code=400, detail=f'{key} must be a list'
+            )
+        groups[key] = payload.get(key, [])
+    raw_refs = payload.get('remove_entries', [])
+    if not isinstance(raw_refs, list):
+        raise HTTPException(
+            status_code=400, detail='remove_entries must be a list'
+        )
+    ref_occurrences = []
+    for ref in raw_refs:
+        if (
+            not isinstance(ref, dict)
+            or type(ref.get('occurrence', 0)) is not int
+            or ref.get('occurrence', 0) < 0
+        ):
+            raise HTTPException(
+                status_code=400, detail='Invalid remove_entries item'
+            )
+        ref_occurrences.append(ref.get('occurrence', 0))
+    if 'allow_duplicates' in payload and not isinstance(
+        payload['allow_duplicates'], bool
+    ):
+        raise HTTPException(
+            status_code=400, detail='allow_duplicates must be a boolean'
+        )
+    total = sum(map(len, groups.values())) + len(raw_refs)
+    if total > MAX_TRACKS_PER_EDIT:
+        raise HTTPException(
+            status_code=400, detail='Too many track references'
+        )
+    # Validate every id before any lookup, including ids in a later group.
+    raw_ids = (
+        groups['add']
+        + groups['remove']
+        + [ref.get('track_id') for ref in raw_refs]
+    )
+    for track_id in raw_ids:
+        if not isinstance(track_id, str) or not track_id.strip():
+            raise HTTPException(
+                status_code=400, detail='track_ids must be strings'
+            )
+
+    entry = await asyncio.to_thread(
+        api.require_playlist_visible, name.strip(), request
+    )
+    if not entry.get('manual'):
+        raise HTTPException(
+            status_code=403, detail='Only a Library playlist can be edited'
+        )
+    if not entry.get('mine', True) and not entry.get('can_edit_tracks'):
+        raise HTTPException(
+            status_code=403, detail='Only an editor can change this playlist'
+        )
+    resolved = await resolve_mobile_track_ids(
+        _sync(),
+        raw_ids,
+        request,
+        refresh=_refresh,
+        filter_paths=api.filter_paths_for_request,
+    )
+    add_end = len(groups['add'])
+    remove_end = add_end + len(groups['remove'])
+    add_files = resolved[:add_end]
+    remove_files = resolved[add_end:remove_end]
+    refs = [
+        {'file': path, 'occurrence': occurrence}
+        for path, occurrence in zip(resolved[remove_end:], ref_occurrences)
+    ]
+    try:
+        result = await asyncio.to_thread(
+            api.edit_manual_playlist,
+            api.library_context(),
+            entry['name'],
+            add=add_files,
+            remove=remove_files,
+            remove_entries=[
+                (item['file'], item['occurrence']) for item in refs
+            ],
+            allow_duplicates=payload.get('allow_duplicates', False),
+        )
+    except ManualPlaylistError as exc:
+        raise HTTPException(
+            status_code=exc.status_code, detail=str(exc)
+        ) from exc
+    invalidate_library_paths_cache()
+    if entry.get('visibility', 'private') != 'private':
+        await api.announce_playlists_changed()
+    return await _mobile_playlist_result(result, request)
+
+
+@router.put('/playlists/order')
+async def reorder_mobile_playlist(request: Request) -> dict[str, Any]:
+    _require_playlist_writer(request)
+    _sync()
+    payload = await api._json_object(request)
+    name, ids = payload.get('name'), payload.get('track_ids')
+    if (
+        not isinstance(name, str)
+        or not name.strip()
+        or not isinstance(ids, list)
+    ):
+        raise HTTPException(
+            status_code=400, detail='name and track_ids are required'
+        )
+    if len(ids) > MAX_TRACKS_PER_EDIT:
+        raise HTTPException(
+            status_code=400, detail='Too many track references'
+        )
+    if any(not isinstance(item, str) or not item.strip() for item in ids):
+        raise HTTPException(
+            status_code=400, detail='track_ids must be strings'
+        )
+    entry = await asyncio.to_thread(
+        api.require_playlist_visible, name.strip(), request
+    )
+    if not entry.get('manual'):
+        raise HTTPException(
+            status_code=403, detail='Only a Library playlist can be edited'
+        )
+    if not entry.get('mine', True) and not entry.get('can_edit_tracks'):
+        raise HTTPException(
+            status_code=403, detail='Only an editor can change this playlist'
+        )
+    paths = await resolve_mobile_track_ids(
+        _sync(),
+        ids,
+        request,
+        refresh=_refresh,
+        filter_paths=api.filter_paths_for_request,
+    )
+    visible = await asyncio.to_thread(
+        api.filter_paths_for_request, list(entry.get('files') or []), request
+    )
+    try:
+        result = await asyncio.to_thread(
+            api.reorder_manual_playlist,
+            api.library_context(),
+            entry['name'],
+            paths,
+            visible=set(visible),
+        )
+    except ManualPlaylistError as exc:
+        raise HTTPException(
+            status_code=exc.status_code, detail=str(exc)
+        ) from exc
+    invalidate_library_paths_cache()
+    if entry.get('visibility', 'private') != 'private':
+        await api.announce_playlists_changed()
+    return await _mobile_playlist_result(result, request)
+
+
+@router.get('/usernames')
+async def usernames(request: Request) -> dict[str, Any]:
+    """``{enabled, usernames}``: who a playlist can be shared with
+    (everyone but you) - names only, since users can't list accounts.
+    ``enabled`` is the admin's *Allow users to share playlists*."""
+
+    me = api.request_user_id(request)
+    enabled = api.sharing_enabled()
+    names = sorted(
+        (name for uid, name in api._usernames().items() if uid != me),
+        key=str.casefold,
+    )
+    return {'enabled': enabled, 'usernames': names if enabled else []}
+
+
+@router.get('/tracks/{track_id}/loudness')
+async def track_loudness(track_id: str, request: Request) -> dict[str, Any]:
+    """The track's playback loudness profile (see downtify/loudness.py)."""
+
+    row, _ = await asyncio.to_thread(_track_path, track_id, request)
+    return await api.track_loudness(request, str(row['file']))
+
+
+@router.put('/playlists/favorite')
+async def favorite_playlist(request: Request) -> dict[str, Any]:
+    """Set the same account preference as the web player."""
+    return await api.set_playlist_favorite_endpoint(request)
+
+
+async def _playlist_name(request: Request) -> str:
+    name = request.query_params.get('name', '')
+    if not name:
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        name = str((payload or {}).get('name') or '')
+    name = name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail='name is required')
+    return name
+
+
+def _shares():
+    if api.state.playlist_shares is None:
+        raise HTTPException(status_code=503, detail='Starting up')
+    return api.state.playlist_shares
+
+
+@router.post('/playlists/follow')
+async def follow_playlist(request: Request) -> dict[str, Any]:
+    """Follow a public playlist (``{name}``): it stays in your list and
+    follows its owner's changes, until they make it private."""
+
+    name = await _playlist_name(request)
+    user_id = api.request_user_id(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail='Sign in required')
+    entry = api.require_playlist_visible(name, request)
+    if entry.get('mine') or entry.get('visibility') != 'public':
+        raise HTTPException(
+            status_code=400, detail='Only public playlists can be followed'
+        )
+    await asyncio.to_thread(_shares().follow, user_id, entry['name'], True)
+    await api.announce_playlists_changed()
+    return {'name': entry['name'], 'followed': True}
+
+
+@router.delete('/playlists/follow')
+async def unfollow_playlist(request: Request) -> dict[str, Any]:
+    """Stop following a playlist (``?name=``). Idempotent."""
+
+    name = await _playlist_name(request)
+    user_id = api.request_user_id(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail='Sign in required')
+    await asyncio.to_thread(_shares().follow, user_id, name, False)
+    await api.announce_playlists_changed()
+    return {'name': name, 'followed': False}
+
+
+@router.post('/playlists/seen')
+async def playlist_seen(request: Request) -> dict[str, Any]:
+    """Clear the *new* marker of a playlist shared with you (``{name}``)."""
+
+    name = await _playlist_name(request)
+    user_id = api.request_user_id(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail='Sign in required')
+    await asyncio.to_thread(_shares().mark_seen, name, user_id)
+    return {'name': name, 'new': False}
+
+
+@router.get('/playlists/hidden')
+async def hidden_songs(request: Request) -> dict[str, Any]:
+    """The songs hidden from an imported playlist of yours (``?name=``),
+    most recently hidden first: ``{name, songs: [{key, label, track_id,
+    hidden_at}]}``. ``track_id`` is ``''`` once the song's file is no
+    longer in the library; ``key`` is what ``show`` takes."""
+
+    name = await _playlist_name(request)
+    found = await asyncio.to_thread(api.hidden_playlist_songs, name, request)
+    files = [song['file'] for song in found['songs'] if song['present']]
+    ids = await asyncio.to_thread(_sync().ids_for_paths, files)
+    return {
+        'name': found['name'],
+        'songs': [
+            {
+                'key': song['key'],
+                'label': song['label'],
+                'track_id': ids.get(song['file'], '')
+                if song['present']
+                else '',
+                'hidden_at': song['hidden_at'],
+            }
+            for song in found['songs']
+        ],
+    }
+
+
+@router.post('/playlists/hidden')
+async def change_hidden_songs(request: Request) -> dict[str, Any]:
+    """Hide tracks from an imported playlist of yours, or show hidden
+    songs again: ``{name, hide: [track_ids], show: [keys]}``. A hidden
+    song leaves the playlist and stays out when its watch or link brings
+    it back; the track itself stays in the library. Answers ``{name,
+    hidden, keys, shown, restored, count, track_ids}``: ``keys`` undo the
+    hide (pass them as ``show``), ``track_ids`` are the playlist's tracks
+    after the change."""
+
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    payload = payload if isinstance(payload, dict) else {}
+    name = str(payload.get('name') or '').strip()
+    if not name:
+        raise HTTPException(status_code=400, detail='name is required')
+    paths = [
+        (await asyncio.to_thread(_track_path, str(track_id), request))[0][
+            'file'
+        ]
+        for track_id in _strings(payload.get('hide'))
+    ]
+    result = await api.change_hidden_playlist_songs(
+        request, name, paths, _strings(payload.get('show'))
+    )
+    files = list(result.get('files') or [])
+    ids = await asyncio.to_thread(_sync().ids_for_paths, files)
+    return {
+        'name': result['name'],
+        'hidden': result['hidden'],
+        'keys': result['keys'],
+        'shown': result['shown'],
+        'restored': result['restored'],
+        'count': len(files),
+        'track_ids': [ids[f] for f in files if f in ids],
+    }
+
+
+def _strings(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if str(item or '').strip()]
 
 
 @router.get('/likes')
@@ -239,7 +701,7 @@ async def stream(
     adds a ``Content-Disposition`` for saving the file.
     """
 
-    row, full = _track_path(track_id)
+    row, full = await asyncio.to_thread(_track_path, track_id, request)
     fmt = fmt.lower()
     headers = {'Cache-Control': _PRIVATE_CACHE}
     if fmt != 'original':
@@ -285,7 +747,7 @@ async def cover(
     """The track's cover: ``size=150|300|600`` (longest side, px) or full
     size when omitted. Cached on the server, ETag for conditional GETs."""
 
-    _row, full = _track_path(track_id)
+    _row, full = await asyncio.to_thread(_track_path, track_id, request)
     thumbs = api.state.cover_thumbs
     if thumbs is None:
         raise HTTPException(status_code=503, detail='Starting up')
@@ -359,3 +821,121 @@ async def sign(request: Request) -> dict[str, Any]:
             )
         )
     return {'urls': urls, 'expires_at': int(time.time()) + ttl}
+
+
+@router.patch('/tracks/{track_id}/metadata')
+async def edit_track_metadata(
+    track_id: str, request: Request
+) -> dict[str, Any]:
+    """Edit tags on one visible track; see the batch endpoint for details."""
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail='Expected an object')
+    results = await _edit_metadata(
+        request,
+        [track_id],
+        payload.get('changes'),
+        {track_id: payload.get('revision')},
+    )
+    result = results[0]
+    if result.get('error'):
+        raise HTTPException(
+            status_code=result['status'], detail=result['error']
+        )
+    return result
+
+
+@router.patch('/tracks/metadata/batch')
+async def edit_tracks_metadata(request: Request) -> dict[str, Any]:
+    """Apply common changes to track IDs, reporting success or failure per track."""
+    payload = await request.json()
+    if not isinstance(payload, dict) or not isinstance(
+        payload.get('track_ids'), list
+    ):
+        raise HTTPException(status_code=422, detail='track_ids must be a list')
+    ids = payload['track_ids']
+    if (
+        not ids
+        or len(ids) > 500
+        or any(not isinstance(i, str) or not i for i in ids)
+        or len(set(ids)) != len(ids)
+    ):
+        raise HTTPException(
+            status_code=422, detail='Provide 1 to 500 unique track IDs'
+        )
+    revisions = payload.get('revisions', {})
+    if not isinstance(revisions, dict):
+        raise HTTPException(
+            status_code=422, detail='revisions must be an object'
+        )
+    return {
+        'results': await _edit_metadata(
+            request, ids, payload.get('changes'), revisions
+        )
+    }
+
+
+async def _edit_metadata(
+    request: Request, ids: list[str], changes: Any, revisions: dict[str, Any]
+) -> list[dict[str, Any]]:
+    principal = api.principal_of(request)
+    if (
+        principal is None
+        or principal.kind not in {'session', 'device', 'open'}
+        or not api.request_user_id(request)
+    ):
+        raise HTTPException(status_code=401, detail='Sign in required')
+    try:
+        changes = validate_changes(changes)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    await asyncio.to_thread(_refresh)
+    results = []
+    changed = False
+    for track_id in ids:
+        try:
+            row, full = await asyncio.to_thread(_track_path, track_id, request)
+            file = row['file']
+            revision = revisions.get(track_id)
+            if revision is not None and revision != row.get('revision'):
+                raise HTTPException(
+                    status_code=409,
+                    detail='Track changed; reload and try again',
+                )
+            old_key = content_key_for(full) or ''
+            await asyncio.to_thread(edit_file, full, changes)
+            changed = True
+            new_key = content_key_for(full) or ''
+            if old_key and new_key and old_key != new_key:
+                await asyncio.to_thread(
+                    api.rekey_file_owners, old_key, new_key, file
+                )
+            await asyncio.to_thread(api._after_replacement, file, full)
+            changed = True
+            results.append({'id': track_id, 'ok': True})
+        except HTTPException as exc:
+            results.append({
+                'id': track_id,
+                'ok': False,
+                'status': exc.status_code,
+                'error': exc.detail,
+            })
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            results.append({
+                'id': track_id,
+                'ok': False,
+                'status': 422,
+                'error': str(exc),
+            })
+        except Exception:
+            logger.exception('Could not edit metadata for track {}', track_id)
+            results.append({
+                'id': track_id,
+                'ok': False,
+                'status': 500,
+                'error': 'Could not edit metadata',
+            })
+    if changed:
+        await asyncio.to_thread(_refresh)
+        api.announce_library_changed()
+    return results
