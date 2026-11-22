@@ -14,7 +14,7 @@ def test_catchup_is_user_scoped_and_does_not_repeat(tmp_path):
         store.ensure_user(owner)
 
     def rows(prefix, start, count):
-        genres = ('rap', 'rock', 'electro', 'Pop')
+        genres = ('rap', 'rock', 'electro', 'Pop', 'jazz')
         return [
             {
                 'id': f'{prefix}-{i}',
@@ -43,7 +43,7 @@ def test_catchup_is_user_scoped_and_does_not_repeat(tmp_path):
         return rows('u', 0, 60) if owner == 1 else rows('v', 0, 60)
 
     now = datetime(2026, 11, 5, 13, tzinfo=PARIS)
-    assert refresh_due(store, 'm', lambda uid: True, visible, now=now) == 26
+    assert refresh_due(store, 'm', lambda uid: True, visible, now=now) == 28
     assert sorted(calls) == [1, 2]
     calls.clear()
     assert refresh_due(store, 'm', lambda uid: True, visible, now=now) == 0
@@ -75,6 +75,49 @@ def test_initial_partial_analysis_is_not_frozen_as_empty(tmp_path):
     assert refresh_due(store, 'm', lambda uid: True, lambda uid: rows) == 0
     with store.connect() as db:
         assert db.execute('SELECT count(*) FROM playlists').fetchone()[0] == 0
+
+
+def test_genre_without_tracks_is_not_retried_every_minute(tmp_path):
+    store = opted_in_store(tmp_path / 'derived.db')
+    store.ensure_user(1)
+    rows = [
+        {'id': str(i), 'artist': str(i), 'genre': 'pop', 'fingerprint': str(i)}
+        for i in range(60)
+    ]
+    store.observe(rows)
+    for row in rows:
+        store.put_analysis(row['id'], row['fingerprint'], 'm', [1] + [0] * 511)
+    with store.connect() as db:
+        for mood in MOODS:
+            db.execute(
+                'INSERT INTO mood_vectors VALUES (?,?,?)',
+                (mood, 'm', Store.pack([1] + [0] * 511)),
+            )
+    calls = []
+
+    def visible(uid):
+        calls.append(uid)
+        return rows
+
+    now = datetime(2026, 11, 5, 13, tzinfo=PARIS)
+    assert refresh_due(
+        store, 'm', lambda uid: True, visible, now=now, locale_for=lambda uid: 'fr'
+    ) > 0
+    assert calls == [1, 2]
+    # Empty genre/mood-variant themes (rap-nat, rock-intl, ...) are remembered
+    # for this period, so a second pass must not walk the catalog again.
+    assert (
+        refresh_due(
+            store,
+            'm',
+            lambda uid: True,
+            visible,
+            now=now,
+            locale_for=lambda uid: 'fr',
+        )
+        == 0
+    )
+    assert calls == [1, 2]
 
 
 def test_generation_yields_before_ranking_when_dj_requests_compute(tmp_path):

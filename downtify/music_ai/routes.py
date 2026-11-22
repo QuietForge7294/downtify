@@ -18,9 +18,15 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from . import covers
-from .playlists import period, stored_selections, summaries
+from .playlists import (
+    genre_variants,
+    is_genre_theme,
+    period,
+    stored_selections,
+    summaries,
+)
 from .ranking import rank
-from .store import GENRE_THEMES, MOODS, Store
+from .store import MOODS, Store
 
 router = APIRouter(prefix='/api/v1/music-ai', tags=['Optional music AI'])
 
@@ -65,6 +71,18 @@ def admin(request):
     owner(request)
     if not api.request_is_admin(request):
         raise HTTPException(403, 'Administrator required')
+
+
+def owner_language(request):
+    """The account's UI language (Settings > Appearance), split to ``fr``."""
+    from .. import api
+
+    uid = owner(request)
+    try:
+        locale = api.state.auth.users.preferences(uid).get('locale') or ''
+    except Exception:
+        locale = ''
+    return str(locale or 'en').split('-')[0].strip().lower() or 'en'
 
 
 def catalog(request):
@@ -336,7 +354,7 @@ def capabilities(request: Request):
         'profile_revision': store().metadata(f'profile_revision:{uid}', 0),
         'features': store().effective(uid),
         'model': store().metadata('model', {'ready': False}),
-        'moods': list(MOODS) + list(GENRE_THEMES),
+        'moods': list(MOODS) + genre_variants(owner_language(request)),
         'dj': dj,
         'source_available': Path('/downtify/music-ai-source.tar.gz').is_file(),
     }
@@ -461,7 +479,10 @@ def playlist_cards(request, home_only=False):
                 and item['mood']
                 in {'detente', 'concentration', 'energie', 'calme'}
             )
-            or (item['cadence'] == 'weekly' and item['mood'] in GENRE_THEMES)
+            or (
+                item['cadence'] == 'weekly'
+                and is_genre_theme(item['mood'])
+            )
         ]
     identities = list(
         dict.fromkeys(
@@ -512,7 +533,7 @@ async def home(request: Request):
             )
             result[-1] = {**result[-1], 'title': title}
     if flags['weekly']:
-        for mood in GENRE_THEMES:
+        for mood in genre_variants(owner_language(request)):
             card = next(
                 (
                     item
@@ -556,7 +577,7 @@ def playlist_cover(
     """Deterministic local cover: the same set always gets the same picture."""
     require(request, cadence)
     if mood not in MOODS and not (
-        cadence == 'weekly' and mood in GENRE_THEMES
+        cadence == 'weekly' and is_genre_theme(mood)
     ):
         raise HTTPException(404, 'Unknown mood')
     key = period_key or period(cadence)
@@ -579,7 +600,7 @@ async def mood_playlist(
 ):
     uid = require(request, cadence)
     if mood not in MOODS and not (
-        cadence == 'weekly' and mood in GENRE_THEMES
+        cadence == 'weekly' and is_genre_theme(mood)
     ):
         raise HTTPException(404, 'Unknown mood')
     selections = stored_selections(store(), uid)

@@ -7,6 +7,8 @@ import json
 import math
 import time
 
+from .playlists import classify_genre
+
 
 def recent_addition(row, *, now=None):
     try:
@@ -40,6 +42,14 @@ def synchronize(database, native):
         {**row, 'fingerprint': fingerprint(row)} for row in feed['tracks']
     ]
     database.observe(changed)
+    # Genre/language scopes are derived in this same incremental pass: one
+    # classification per changed row, never a re-read of the audio files.
+    database.set_scopes(
+        {
+            row['id']: classify_genre(row.get('genre'))
+            for row in changed
+        }
+    )
     with database.connect() as db:
         if feed['full']:
             db.execute('DELETE FROM catalog_live')
@@ -64,10 +74,17 @@ def synchronize(database, native):
             'DELETE FROM catalog_pending WHERE id=?',
             [(identity,) for identity in feed['deleted']],
         )
+        db.executemany(
+            'DELETE FROM track_scopes WHERE id=?',
+            [(identity,) for identity in feed['deleted']],
+        )
         # Derived audio from removed native rows must not remain usable.
         if feed['full']:
             db.execute(
                 'DELETE FROM analyses WHERE id NOT IN (SELECT id FROM catalog_live)'
+            )
+            db.execute(
+                'DELETE FROM track_scopes WHERE id NOT IN (SELECT id FROM catalog_live)'
             )
         else:
             db.executemany(
@@ -83,6 +100,36 @@ def synchronize(database, native):
                 (key, json.dumps(value)),
             )
     return len(changed) + len(feed['deleted'])
+
+
+def backfill_scopes(database):
+    """Classify rows ingested before scopes existed, once, in bounded chunks.
+
+    This never walks the library on disk: it reads the rows the single
+    incremental scan already stored.
+    """
+    if database.metadata('track_scopes_ready', False):
+        return 0
+    done = 0
+    while True:
+        with database.connect() as db:
+            rows = db.execute(
+                'SELECT t.id,t.row_json FROM tracks t '
+                'JOIN catalog_live l ON l.id=t.id '
+                'LEFT JOIN track_scopes s ON s.id=t.id '
+                'WHERE s.id IS NULL LIMIT 500'
+            ).fetchall()
+        if not rows:
+            break
+        database.set_scopes(
+            {
+                row[0]: classify_genre(json.loads(row[1]).get('genre'))
+                for row in rows
+            }
+        )
+        done += len(rows)
+    database.set_metadata('track_scopes_ready', True)
+    return done
 
 
 def snapshot(database):

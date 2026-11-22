@@ -16,6 +16,7 @@ def refresh_due(
     *,
     now=None,
     checkpoint=lambda: True,
+    locale_for=None,
 ):
     with database.connect() as db:
         users = [
@@ -25,10 +26,19 @@ def refresh_due(
             )
         ]
     created = 0
+    generation = database.metadata('analysis_generation', 0)
+    with database.connect() as db:
+        skipped = {
+            row[0]: json.loads(row[1])
+            for row in db.execute(
+                "SELECT key,value FROM metadata WHERE key LIKE 'theme_skip:%'"
+            )
+        }
     for uid in users:
         if not user_for(uid):
             continue
         flags = database.effective(uid)
+        lang = locale_for(uid) if locale_for else 'en'
         rows = None
         for cadence in ('daily', 'weekly'):
             if not flags[cadence]:
@@ -42,7 +52,18 @@ def refresh_due(
                         (uid, cadence, current),
                     )
                 }
-            missing = set(themes(cadence)) - existing
+            missing = {
+                mood
+                for mood in set(themes(cadence, lang)) - existing
+                # A genre without enough tagged tracks (typically a national
+                # variant of a small library) must not rescan the whole catalog
+                # every minute: the failure is remembered until the next period
+                # or until new analyses land.
+                if skipped.get(
+                    f'theme_skip:{uid}:{cadence}:{mood}:{current}'
+                )
+                != generation
+            }
             if not missing:
                 continue
             if rows is None:
@@ -52,11 +73,31 @@ def refresh_due(
             for mood in sorted(missing):
                 if not checkpoint():
                     return created
+                skip = f'theme_skip:{uid}:{cadence}:{mood}:{current}'
                 try:
                     generate(
-                        database, uid, cadence, mood, rows, identity, now=now
+                        database,
+                        uid,
+                        cadence,
+                        mood,
+                        rows,
+                        identity,
+                        now=now,
+                        lang=lang,
                     )
-                except (RuntimeError, PermissionError):
+                except PermissionError:
+                    continue
+                except RuntimeError:
+                    with database.connect() as db:
+                        db.execute(
+                            'DELETE FROM metadata WHERE key LIKE ?',
+                            (f'theme_skip:{uid}:{cadence}:{mood}:%',),
+                        )
+                        db.execute(
+                            'INSERT OR REPLACE INTO metadata VALUES (?,?)',
+                            (skip, json.dumps(generation)),
+                        )
+                    skipped[skip] = generation
                     continue  # Do not freeze an empty playlist during initial indexing.
                 created += 1
     return created
@@ -128,7 +169,15 @@ def native_sweep():
         favorites = favorite_ids(request, rows)
         return [{**row, 'favorite': row['id'] in favorites} for row in rows]
 
-    refresh_due(store(), status['id'], user_for, rows_for)
+    def locale_for(uid):
+        try:
+            return api.state.auth.users.preferences(uid).get('locale') or 'en'
+        except Exception:
+            return 'en'
+
+    refresh_due(
+        store(), status['id'], user_for, rows_for, locale_for=locale_for
+    )
 
     from .dj_routes import visible
     from .dj_weekly import enqueue_due

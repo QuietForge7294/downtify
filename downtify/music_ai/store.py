@@ -42,7 +42,7 @@ MOODS = {
 # the centroid of the genre's analysed tracks. They live outside MOODS so the
 # analysis worker keeps publishing exactly the six pinned mood vectors that the
 # bundled CLAP release supports (see encoder.verify_manifest / publish_model).
-GENRE_THEMES = ('rap', 'rock', 'electro', 'pop')
+GENRE_THEMES = ('rap', 'rock', 'electro', 'pop', 'jazz')
 
 
 class Store:
@@ -87,6 +87,10 @@ class Store:
                 CREATE TABLE IF NOT EXISTS catalog_live (id TEXT PRIMARY KEY);
                 CREATE TABLE IF NOT EXISTS catalog_pending (id TEXT PRIMARY KEY, priority REAL NOT NULL DEFAULT 0);
                 CREATE INDEX IF NOT EXISTS catalog_pending_priority ON catalog_pending(priority DESC,id);
+                CREATE TABLE IF NOT EXISTS track_scopes (
+                    id TEXT PRIMARY KEY,
+                    genres TEXT NOT NULL DEFAULT '[]',
+                    languages TEXT NOT NULL DEFAULT '[]');
                 CREATE TABLE IF NOT EXISTS compute_lease (id INTEGER PRIMARY KEY, token TEXT NOT NULL, kind TEXT NOT NULL, expires REAL NOT NULL);
                 CREATE INDEX IF NOT EXISTS listen_track_time ON listens(track,at);
             """)
@@ -666,3 +670,54 @@ class Store:
                 'INSERT OR REPLACE INTO metadata VALUES (?,?)',
                 (key, json.dumps(value)),
             )
+
+    def set_scopes(self, scopes):
+        """Record derived genre/language scopes for changed tracks only.
+
+        The classification is computed once, in the same incremental pass
+        that ingests the library rows, so mix generation never re-reads the
+        files or re-parses every tag.
+        """
+        if not scopes:
+            return
+        values = [
+            (
+                identity,
+                json.dumps(scope.get('genres', [])),
+                json.dumps(scope.get('languages', [])),
+            )
+            for identity, scope in scopes.items()
+        ]
+        with self.connect() as db:
+            db.executemany(
+                'INSERT OR REPLACE INTO track_scopes VALUES (?,?,?)', values
+            )
+
+    def drop_scopes(self, identities):
+        identities = list(identities)
+        if not identities:
+            return
+        with self.connect() as db:
+            db.executemany(
+                'DELETE FROM track_scopes WHERE id=?',
+                [(identity,) for identity in identities],
+            )
+
+    def scopes(self, identities=None):
+        """``{id: {'genres': [...], 'languages': [...]}}`` for known tracks."""
+        query = 'SELECT id,genres,languages FROM track_scopes'
+        args = ()
+        if identities is not None:
+            identities = list(dict.fromkeys(identities))
+            if not identities:
+                return {}
+            query += ' WHERE id IN (' + ','.join('?' for _ in identities) + ')'
+            args = identities
+        with self.connect() as db:
+            return {
+                row[0]: {
+                    'genres': json.loads(row[1]),
+                    'languages': json.loads(row[2]),
+                }
+                for row in db.execute(query, args)
+            }

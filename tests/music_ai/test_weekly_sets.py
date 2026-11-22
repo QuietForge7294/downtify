@@ -55,8 +55,9 @@ NOW = datetime(2026, 11, 12, 10, tzinfo=PARIS)
 def test_daily_keeps_six_moods_and_weekly_includes_pop():
     assert len(themes('daily')) == 6
     assert set(themes('daily')).isdisjoint(GENRE_THEMES)
-    assert len(themes('weekly')) == 10
+    assert len(themes('weekly')) == 11  # six moods + five genre themes
     assert set(GENRE_THEMES) <= set(themes('weekly'))
+    assert 'jazz' in themes('weekly')
     with pytest.raises(ValueError):
         themes('monthly')
 
