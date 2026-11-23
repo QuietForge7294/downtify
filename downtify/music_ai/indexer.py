@@ -5,6 +5,7 @@ import hashlib
 import json
 
 from .catalog import (
+    backfill_scopes,
     candidates,
     ensure_analysis_queue,
     recent_addition,
@@ -50,6 +51,7 @@ def index_pass():
     if busy:
         return
     synchronize(database, mobile_routes._sync())
+    backfill_scopes(database)
     if identity:
         ensure_analysis_queue(database, identity)
     if rhythm_model:

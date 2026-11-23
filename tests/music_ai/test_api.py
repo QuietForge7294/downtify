@@ -763,3 +763,13 @@ def test_mix_refresh_authenticated_idempotent_and_metadata_only(
         ).status_code
         == 403
     )
+
+
+def test_capabilities_describe_every_mood_for_data_driven_clients(client):
+    http, _ = client
+    caps = http.get(
+        '/api/v1/music-ai/capabilities', headers={'x-test-user': '1'}
+    ).json()
+    meta = caps['moods_meta']
+    assert [row['name'] for row in meta] == caps['moods']
+    assert all({'name', 'label', 'color', 'group'} <= set(row) for row in meta)

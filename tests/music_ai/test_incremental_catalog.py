@@ -45,6 +45,66 @@ def test_native_cursor_only_reads_changed_rows_and_invalidates_replaced_sources(
     assert len(candidates(database, 'm', limit=25)) == 25
 
 
+def test_scopes_are_derived_once_per_changed_row_and_dropped_with_it(tmp_path):
+    native = LibrarySync(tmp_path / 'native.db')
+    database = Store(tmp_path / 'derived.db')
+    rows = [
+        {'file': 'a.mp3', 'title': 'A', 'genre': 'chanson française; pop', 'size': 20},
+        {'file': 'b.mp3', 'title': 'B', 'genre': 'pop', 'size': 20},
+        {'file': 'c.mp3', 'title': 'C', 'genre': 'rap français', 'size': 20},
+    ]
+    native.refresh(rows)
+    feed = SimpleNamespace(cursor=native.cursor, changes=native.changes)
+    assert synchronize(database, feed) == 3
+    scopes = database.scopes()
+    assert len(scopes) == 3
+    values = {scope['genres'][0] for scope in scopes.values()}
+    assert values == {'pop', 'rap'}
+    first = next(
+        key
+        for key, scope in scopes.items()
+        if scope['languages'] == ['fr'] and scope['genres'] == ['pop']
+    )
+    assert scopes[first]['languages'] == ['fr']
+    # A second pass with an unchanged feed writes nothing.
+    assert synchronize(database, feed) == 0
+    assert database.scopes() == scopes
+    # A changing tag updates only that row's scope.
+    rows[0]['genre'] = 'rock'
+    rows[0]['size'] = 21
+    native.refresh(rows)
+    assert synchronize(database, feed) == 1
+    assert database.scopes()[first]['genres'] == ['rock']
+    # A removed track forgets its scope.
+    removed = next(
+        key for key, scope in database.scopes().items() if scope['genres'] == ['rap']
+    )
+    rows[:] = [row for row in rows if row['file'] != 'c.mp3']
+    native.refresh(rows)
+    assert synchronize(database, feed) == 1
+    assert removed not in database.scopes()
+
+
+def test_backfill_classifies_legacy_rows_once_without_touching_files(tmp_path):
+    from downtify.music_ai.catalog import backfill_scopes
+
+    database = Store(tmp_path / 'derived.db')
+    database.observe([
+        {'id': 'x', 'fingerprint': 'fx', 'genre': 'latino', 'file': 'x.mp3'},
+        {'id': 'y', 'fingerprint': 'fy', 'genre': 'jazz', 'file': 'y.mp3'},
+    ])
+    with database.connect() as db:
+        db.executemany(
+            'INSERT INTO catalog_live VALUES (?)', [('x',), ('y',)]
+        )
+    assert backfill_scopes(database) == 2
+    scopes = database.scopes()
+    assert scopes['x'] == {'genres': [], 'languages': ['es']}
+    assert scopes['y'] == {'genres': ['jazz'], 'languages': []}
+    # The marker makes the backfill a one-off.
+    assert backfill_scopes(database) == 0
+
+
 def test_native_bulk_lookup_resolves_requested_ids_without_full_feed(
     tmp_path, monkeypatch
 ):
@@ -103,3 +163,40 @@ def test_visible_selection_checks_current_acl_and_hidden_files_using_only_points
         )
     ] == ['other', 'one']
     assert calls == [['other', 'one', 'hidden', 'missing', 'forbidden']]
+
+
+def test_scope_revision_reclassifies_existing_tags_and_resumes(tmp_path, monkeypatch):
+    from downtify.music_ai.catalog import SCOPE_REVISION, backfill_scopes
+
+    database = Store(tmp_path / 'derived.db')
+    rows = [
+        {'id': f't-{index:03}', 'fingerprint': f'f-{index}', 'genre': 'techno'}
+        for index in range(501)
+    ]
+    database.observe(rows)
+    with database.connect() as db:
+        db.executemany('INSERT INTO catalog_live VALUES (?)', [(row['id'],) for row in rows])
+    database.set_scopes({row['id']: {'genres': ['electro']} for row in rows})
+    database.set_metadata('track_scopes_ready', True)
+    save = database.set_scopes
+    batches = []
+
+    def stop_after_first(scopes):
+        if batches:
+            raise InterruptedError
+        batches.append(len(scopes))
+        save(scopes)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(database, 'set_scopes', stop_after_first)
+        try:
+            backfill_scopes(database)
+        except InterruptedError:
+            pass
+        else:
+            raise AssertionError('The simulated interruption did not run')
+    assert batches == [500]
+    assert backfill_scopes(database) == 1
+    assert backfill_scopes(database) == 0
+    assert database.metadata('track_scopes_revision', 0) == SCOPE_REVISION
+    assert all(scope['genres'] == ['electro', 'techno'] for scope in database.scopes().values())

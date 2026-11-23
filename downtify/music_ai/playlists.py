@@ -10,7 +10,10 @@ from zoneinfo import ZoneInfo
 
 from . import covers
 from .ranking import rank
-from .store import GENRE_THEMES, MOODS
+from .store import GENRE_THEMES as BASE_GENRE_THEMES
+from .store import MOODS
+
+GENRE_THEMES = (*BASE_GENRE_THEMES, 'techno')
 
 PARIS = ZoneInfo('Europe/Paris')
 
@@ -20,26 +23,217 @@ GENRES = {
     'rap': r'\b(rap|hip[ -]?hop|trap)\b',
     'rock': r'\b(rock|metal|punk|grunge)\b',
     'electro': r'\b(electro\w*|house|techno|trance|dance|edm|dubstep)\b',
+    'techno': r'\btechno\b',
+    'jazz': r'\b(jazz|bebop|be[ -]?bop|swing|bossa[ -]?nova|smooth jazz)\b',
 }
 WEEKLY_SIZE = 25
 DAILY_SIZE = 40
 
+# A genre theme can be split by the account's language: the "national" variant
+# keeps tracks whose native genre tag names the account's own music (French
+# chanson, Latin music, ...), the "international" one keeps the rest. Languages
+# without a known marker keep a single, unsplit genre mix. The tags come from
+# the library's own genre frames, so no external lookup is needed.
+NATIONAL_MARKERS = {
+    'fr': r'\b(chanson[s]? fran[çc]aise[s]?|rap fran[çc]ais|'
+    r'vari[ée]t[ée] fran[çc]aise|french pop|french hip hop|'
+    r'fran[çc]ais[e]?|francophone)\b',
+    'es': r'\b(latin[oa]?|urbano latino|espa[ñn]ol|spanish)\b',
+    'pt': r'\b(portugu[eê]s|brasileir[oa]|mpb|samba|bossa[ -]?nova)\b',
+    'it': r'\b(italian[oa]?|italo)\b',
+    'de': r'\b(deutsch|german|schlager)\b',
+}
 
-def themes(cadence):
+
+# Client-facing metadata for every theme. The app renders whatever this list
+# advertises, so a new mix only needs a server-side entry: no APK update.
+MOOD_LABELS = {
+    'calme': 'Calme',
+    'concentration': 'Concentration',
+    'energie': 'Motivation',
+    'fete': 'Fête',
+    'melancolie': 'Mélancolie',
+    'detente': 'Détente',
+    'rap': 'Rap & Hip-Hop',
+    'rock': 'Rock',
+    'electro': 'Électro',
+    'pop': 'Pop',
+    'jazz': 'Jazz',
+    'techno': 'Techno',
+}
+MOOD_COLORS = {
+    'calme': '#4F46E5',
+    'concentration': '#334155',
+    'energie': '#C2410C',
+    'fete': '#A21CAF',
+    'melancolie': '#1D4ED8',
+    'detente': '#0F766E',
+    'rap': '#854D0E',
+    'rock': '#B91C1C',
+    'electro': '#0369A1',
+    'pop': '#BE185D',
+    'jazz': '#7C3AED',
+    'techno': '#0F766E',
+}
+DEFAULT_MOOD_COLOR = '#0F766E'
+
+
+def _language(lang):
+    return str(lang or 'en').split('-')[0].strip().lower() or 'en'
+
+
+def _split_genre_theme(theme):
+    """``(genre, variant)`` for a genre theme, or ``(None, None)``.
+
+    ``variant`` is ``all`` (unsplit), ``national`` or ``international``.
+    """
+    if theme in GENRE_THEMES:
+        return theme, 'all'
+    for suffix, variant in (('-nat', 'national'), ('-intl', 'international')):
+        if theme.endswith(suffix):
+            base = theme[: -len(suffix)]
+            if base in GENRE_THEMES:
+                return base, variant
+    return None, None
+
+
+def is_genre_theme(theme):
+    return _split_genre_theme(theme)[0] is not None
+
+
+def is_theme(theme):
+    return theme in MOODS or is_genre_theme(theme)
+
+
+def genre_variants(lang='en'):
+    """The weekly genre themes for an account, split by language when known."""
+    language = _language(lang)
+    if language in NATIONAL_MARKERS:
+        variants = []
+        for genre in GENRE_THEMES:
+            variants.append(f'{genre}-nat')
+            variants.append(f'{genre}-intl')
+        return variants
+    return list(GENRE_THEMES)
+
+
+def mood_catalog(lang='en'):
+    """Descriptors for every advertised theme: name, label, colour, group.
+
+    Kept additive next to ``moods`` so older clients keep working. The whole
+    mix shelf is data-driven: adding a genre here makes it appear in updated
+    clients without shipping a new application build.
+    """
+    rows = []
+    for mood in MOODS:
+        if mood in GENRE_THEMES:
+            continue
+        rows.append(
+            {
+                'name': mood,
+                'label': MOOD_LABELS.get(mood, mood.title()),
+                'color': MOOD_COLORS.get(mood, DEFAULT_MOOD_COLOR),
+                'group': 'daily',
+            }
+        )
+    for theme in genre_variants(lang):
+        genre, variant = _split_genre_theme(theme)
+        label = MOOD_LABELS.get(genre, genre.title())
+        if variant == 'national':
+            label = f'{label} · national'
+        elif variant == 'international':
+            label = f'{label} · international'
+        rows.append(
+            {
+                'name': theme,
+                'label': label,
+                'color': MOOD_COLORS.get(genre, DEFAULT_MOOD_COLOR),
+                'group': 'weekly',
+                'base': genre,
+            }
+        )
+    return rows
+
+
+def themes(cadence, lang='en'):
     if cadence == 'daily':
         return [mood for mood in MOODS if mood not in GENRE_THEMES]
     if cadence == 'weekly':
-        return list(MOODS) + list(GENRE_THEMES)
+        return list(MOODS) + genre_variants(lang)
     raise ValueError('Invalid cadence')
 
 
-def genre_rows(theme, rows):
-    """A genre theme never falls back to another style when its tag is missing."""
-    pattern = GENRES.get(theme)
-    if pattern is None:
+GENRE_PATTERNS = {
+    genre: re.compile(pattern, re.I) for genre, pattern in GENRES.items()
+}
+LANGUAGE_PATTERNS = {
+    language: re.compile(pattern, re.I)
+    for language, pattern in NATIONAL_MARKERS.items()
+}
+
+
+def classify_genre(genre):
+    """Derived scope of one track's native genre tag.
+
+    ``genres`` lists the weekly themes it belongs to, ``languages`` the
+    account languages whose own music it names (``chanson française`` is
+    French, ``latino`` Spanish, ...). Computed once when the library row is
+    ingested, never by re-reading the file.
+    """
+    text = str(genre or '')
+    if not text:
+        return {'genres': [], 'languages': []}
+    return {
+        'genres': [
+            genre
+            for genre, matcher in GENRE_PATTERNS.items()
+            if matcher.search(text)
+        ],
+        'languages': [
+            language
+            for language, matcher in LANGUAGE_PATTERNS.items()
+            if matcher.search(text)
+        ],
+    }
+
+
+def genre_rows(theme, rows, lang='en', scopes=None):
+    """A genre theme never falls back to another style when its tag is missing.
+
+    A ``-nat`` theme keeps only the account language's own tracks, a ``-intl``
+    one keeps everything else in that genre. ``scopes`` is the mapping filled
+    by the incremental library pass; rows without an entry are classified from
+    their own tag, which keeps this function usable on plain rows.
+    """
+    genre, variant = _split_genre_theme(theme)
+    if genre is None:
         return rows
-    matcher = re.compile(pattern, re.I)
-    return [row for row in rows if matcher.search(str(row.get('genre') or ''))]
+
+    cache = scopes if scopes is not None else {}
+
+    def scope_of(row):
+        identity = row.get('id')
+        scope = cache.get(identity) if identity is not None else None
+        if scope is None:
+            scope = classify_genre(row.get('genre'))
+            if identity is not None:
+                cache[identity] = scope
+        return scope
+
+    selected = [row for row in rows if genre in scope_of(row)['genres']]
+    if variant == 'all':
+        return selected
+    language = _language(lang)
+    if language not in NATIONAL_MARKERS:
+        # No known national marker: the split is meaningless, keep the genre.
+        return selected
+
+    def is_national(row):
+        return language in scope_of(row)['languages']
+
+    if variant == 'national':
+        return [row for row in selected if is_national(row)]
+    return [row for row in selected if not is_national(row)]
 
 
 def period(cadence, now=None):
@@ -52,9 +246,10 @@ def period(cadence, now=None):
     return (shifted.date() - timedelta(days=shifted.weekday())).isoformat()
 
 
-def generate(store, owner, cadence, mood, rows, model, *, now=None):
-    if mood not in MOODS and mood not in GENRE_THEMES:
+def generate(store, owner, cadence, mood, rows, model, *, now=None, lang='en'):
+    if not is_theme(mood):
         raise ValueError('Unknown mood')
+    genre, _variant = _split_genre_theme(mood)
     features = store.effective(owner)
     if not features.get(cadence, False):
         raise PermissionError('Feature disabled')
@@ -76,7 +271,7 @@ def generate(store, owner, cadence, mood, rows, model, *, now=None):
                 for tid in identities
                 if tid in allowed and tid in current
             ]
-        if mood in GENRE_THEMES:
+        if genre is not None:
             target = None
         else:
             prompt = db.execute(
@@ -85,20 +280,21 @@ def generate(store, owner, cadence, mood, rows, model, *, now=None):
             ).fetchone()
             target = struct.unpack('<512f', prompt[0]) if prompt else None
         proposed = recent_proposals(db, owner)
-    candidates = genre_rows(mood, rows)
+    scopes = store.scopes() if genre is not None else None
+    candidates = genre_rows(mood, rows, lang, scopes=scopes)
     target_size = DAILY_SIZE if cadence == 'daily' else WEEKLY_SIZE
-    if mood in GENRES and len(candidates) < min(target_size, 8):
+    if genre is not None and len(candidates) < min(target_size, 8):
         raise RuntimeError(
             'Not enough local tracks tagged in this genre; fill their metadata '
             'or pick a mood'
         )
-    vectors = store.vectors(model, set(allowed))
+    vectors = store.vectors(model, {row['id'] for row in candidates})
     analyzed_rows = [row for row in candidates if row['id'] in vectors]
     if not analyzed_rows or len(analyzed_rows) < min(
         target_size, len(candidates)
     ):
         raise RuntimeError('The initial catalog analysis is still in progress')
-    if mood in GENRE_THEMES:
+    if genre is not None:
         # A genre theme ranks against the centroid of its analysed tracks,
         # never against a mood prompt (the bundled CLAP release pins only the
         # six mood vectors, so there is no genre mood_vector to look up).
@@ -205,7 +401,7 @@ def _latest(store, owner, cadence, key):
         ).fetchall()
     latest = {}
     for mood, stored_period, ids, created in found:
-        if (mood in MOODS or mood in GENRE_THEMES) and mood not in latest:
+        if is_theme(mood) and mood not in latest:
             latest[mood] = (stored_period, ids, created)
     return latest
 

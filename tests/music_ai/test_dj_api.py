@@ -758,9 +758,9 @@ def test_copy_api_is_owner_scoped_and_weekly_cards_are_metadata_only(
     assert weekly.status_code == 200
     value = weekly.json()
     assert value['period'] == weekly_period()
-    assert len(value['cards']) == 10
+    assert len(value['cards']) == 11
     assert len(value['featured']) == 4
-    assert {'rock', 'rap', 'pop', 'electro'} <= {
+    assert {'rock', 'rap', 'pop', 'electro', 'jazz'} <= {
         card['theme'] for card in value['cards']
     }
     assert value['copies'][0]['id'] == result['id']
