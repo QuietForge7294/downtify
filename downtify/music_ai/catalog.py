@@ -102,33 +102,36 @@ def synchronize(database, native):
     return len(changed) + len(feed['deleted'])
 
 
-def backfill_scopes(database):
-    """Classify rows ingested before scopes existed, once, in bounded chunks.
+# Increment when the genre or language classification rules change.
+SCOPE_REVISION = 2
 
-    This never walks the library on disk: it reads the rows the single
-    incremental scan already stored.
-    """
-    if database.metadata('track_scopes_ready', False):
+
+def backfill_scopes(database):
+    """Reclassify stored tags in bounded batches with a durable checkpoint."""
+    if database.metadata('track_scopes_revision', 0) >= SCOPE_REVISION:
         return 0
+    checkpoint = f'track_scopes_cursor:{SCOPE_REVISION}'
+    after = database.metadata(checkpoint, '')
     done = 0
     while True:
         with database.connect() as db:
             rows = db.execute(
                 'SELECT t.id,t.row_json FROM tracks t '
                 'JOIN catalog_live l ON l.id=t.id '
-                'LEFT JOIN track_scopes s ON s.id=t.id '
-                'WHERE s.id IS NULL LIMIT 500'
+                'WHERE t.id > ? ORDER BY t.id LIMIT 500',
+                (after,),
             ).fetchall()
         if not rows:
             break
-        database.set_scopes(
-            {
-                row[0]: classify_genre(json.loads(row[1]).get('genre'))
-                for row in rows
-            }
-        )
+        database.set_scopes({
+            row[0]: classify_genre(json.loads(row[1]).get('genre'))
+            for row in rows
+        })
+        # Commit the rows before moving the cursor. Replaying a batch is safe.
+        after = rows[-1][0]
+        database.set_metadata(checkpoint, after)
         done += len(rows)
-    database.set_metadata('track_scopes_ready', True)
+    database.set_metadata('track_scopes_revision', SCOPE_REVISION)
     return done
 
 

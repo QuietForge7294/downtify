@@ -163,3 +163,40 @@ def test_visible_selection_checks_current_acl_and_hidden_files_using_only_points
         )
     ] == ['other', 'one']
     assert calls == [['other', 'one', 'hidden', 'missing', 'forbidden']]
+
+
+def test_scope_revision_reclassifies_existing_tags_and_resumes(tmp_path, monkeypatch):
+    from downtify.music_ai.catalog import SCOPE_REVISION, backfill_scopes
+
+    database = Store(tmp_path / 'derived.db')
+    rows = [
+        {'id': f't-{index:03}', 'fingerprint': f'f-{index}', 'genre': 'techno'}
+        for index in range(501)
+    ]
+    database.observe(rows)
+    with database.connect() as db:
+        db.executemany('INSERT INTO catalog_live VALUES (?)', [(row['id'],) for row in rows])
+    database.set_scopes({row['id']: {'genres': ['electro']} for row in rows})
+    database.set_metadata('track_scopes_ready', True)
+    save = database.set_scopes
+    batches = []
+
+    def stop_after_first(scopes):
+        if batches:
+            raise InterruptedError
+        batches.append(len(scopes))
+        save(scopes)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(database, 'set_scopes', stop_after_first)
+        try:
+            backfill_scopes(database)
+        except InterruptedError:
+            pass
+        else:
+            raise AssertionError('The simulated interruption did not run')
+    assert batches == [500]
+    assert backfill_scopes(database) == 1
+    assert backfill_scopes(database) == 0
+    assert database.metadata('track_scopes_revision', 0) == SCOPE_REVISION
+    assert all(scope['genres'] == ['electro', 'techno'] for scope in database.scopes().values())

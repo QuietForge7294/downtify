@@ -10,7 +10,10 @@ from zoneinfo import ZoneInfo
 
 from . import covers
 from .ranking import rank
-from .store import GENRE_THEMES, MOODS
+from .store import GENRE_THEMES as BASE_GENRE_THEMES
+from .store import MOODS
+
+GENRE_THEMES = (*BASE_GENRE_THEMES, 'techno')
 
 PARIS = ZoneInfo('Europe/Paris')
 
@@ -20,6 +23,7 @@ GENRES = {
     'rap': r'\b(rap|hip[ -]?hop|trap)\b',
     'rock': r'\b(rock|metal|punk|grunge)\b',
     'electro': r'\b(electro\w*|house|techno|trance|dance|edm|dubstep)\b',
+    'techno': r'\btechno\b',
     'jazz': r'\b(jazz|bebop|be[ -]?bop|swing|bossa[ -]?nova|smooth jazz)\b',
 }
 WEEKLY_SIZE = 25
@@ -55,6 +59,7 @@ MOOD_LABELS = {
     'electro': 'Électro',
     'pop': 'Pop',
     'jazz': 'Jazz',
+    'techno': 'Techno',
 }
 MOOD_COLORS = {
     'calme': '#4F46E5',
@@ -68,6 +73,7 @@ MOOD_COLORS = {
     'electro': '#0369A1',
     'pop': '#BE185D',
     'jazz': '#7C3AED',
+    'techno': '#0F766E',
 }
 DEFAULT_MOOD_COLOR = '#0F766E'
 
@@ -252,9 +258,6 @@ def generate(store, owner, cadence, mood, rows, model, *, now=None, lang='en'):
     selection_revision = store.metadata(f'selection_revision:{owner}', 0)
     key = period(cadence, now)
     allowed = {row['id']: row for row in rows}
-    # Derived scopes were written when each row entered the library; genre
-    # themes are a plain lookup, never a new tag read.
-    scopes = store.scopes() if genre is not None else None
     with store.connect() as db:
         old = db.execute(
             'SELECT ids FROM playlists WHERE owner=? AND cadence=? AND mood=? AND period=?',
@@ -277,6 +280,7 @@ def generate(store, owner, cadence, mood, rows, model, *, now=None, lang='en'):
             ).fetchone()
             target = struct.unpack('<512f', prompt[0]) if prompt else None
         proposed = recent_proposals(db, owner)
+    scopes = store.scopes() if genre is not None else None
     candidates = genre_rows(mood, rows, lang, scopes=scopes)
     target_size = DAILY_SIZE if cadence == 'daily' else WEEKLY_SIZE
     if genre is not None and len(candidates) < min(target_size, 8):
@@ -284,7 +288,7 @@ def generate(store, owner, cadence, mood, rows, model, *, now=None, lang='en'):
             'Not enough local tracks tagged in this genre; fill their metadata '
             'or pick a mood'
         )
-    vectors = store.vectors(model, set(allowed))
+    vectors = store.vectors(model, {row['id'] for row in candidates})
     analyzed_rows = [row for row in candidates if row['id'] in vectors]
     if not analyzed_rows or len(analyzed_rows) < min(
         target_size, len(candidates)

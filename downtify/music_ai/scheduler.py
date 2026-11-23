@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import time
 
+from .catalog import SCOPE_REVISION
 from .playlists import generate, period, themes
 
 
@@ -27,6 +28,7 @@ def refresh_due(
         ]
     created = 0
     generation = database.metadata('analysis_generation', 0)
+    scopes_ready = database.metadata('track_scopes_revision', 0) >= SCOPE_REVISION
     with database.connect() as db:
         skipped = {
             row[0]: json.loads(row[1])
@@ -59,7 +61,8 @@ def refresh_due(
                 # variant of a small library) must not rescan the whole catalog
                 # every minute: the failure is remembered until the next period
                 # or until new analyses land.
-                if skipped.get(
+                if (scopes_ready or mood.split('-')[0] != 'techno')
+                and skipped.get(
                     f'theme_skip:{uid}:{cadence}:{mood}:{current}'
                 )
                 != generation

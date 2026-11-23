@@ -6,6 +6,7 @@ import pytest
 from ai_test_support import opted_in_store
 
 from downtify.music_ai.playlists import (
+    GENRE_THEMES,
     PARIS,
     generate,
     genre_rows,
@@ -13,7 +14,7 @@ from downtify.music_ai.playlists import (
     is_genre_theme,
     themes,
 )
-from downtify.music_ai.store import GENRE_THEMES, MOODS, Store
+from downtify.music_ai.store import MOODS, Store
 
 
 def vector(axis=0):
@@ -167,3 +168,28 @@ def test_mood_catalog_labels_and_colours_every_theme():
     assert [row['name'] for row in mood_catalog('en')] == (
         list(MOODS) + list(GENRE_THEMES)
     )
+
+
+def test_techno_filters_vectors_and_cached_mix_does_not_read_scopes(store, monkeypatch):
+    data = pop_rows()
+    ids = {row['id'] for row in data[:25]}
+    store.set_scopes({
+        row['id']: {'genres': ['techno'] if row['id'] in ids else ['pop']}
+        for row in data
+    })
+    original = store.vectors
+
+    def only_techno(model, identities):
+        assert identities == ids
+        return original(model, identities)
+
+    monkeypatch.setattr(store, 'vectors', only_techno)
+    first = generate(store, 1, 'weekly', 'techno-intl', data, 'm', now=NOW, lang='fr')
+    assert {row['id'] for row in first} == ids
+
+    def no_scopes():
+        raise AssertionError('Cache hits must not read the scope index')
+
+    monkeypatch.setattr(store, 'scopes', no_scopes)
+    cached = generate(store, 1, 'weekly', 'techno-intl', data, 'm', now=NOW, lang='fr')
+    assert [row['id'] for row in cached] == [row['id'] for row in first]

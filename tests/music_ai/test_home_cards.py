@@ -48,8 +48,9 @@ def test_four_daily_cards_have_stable_order_and_etag_without_full_catalog(
         None,
         None,
         None,
+        None,
     ]
-    assert [item['count'] for item in cards] == [0, 0, 0, 1, 0, 0, 0, 0, 0]
+    assert [item['count'] for item in cards] == [0, 0, 0, 1, 0, 0, 0, 0, 0, 0]
     assert cards[3]['cover_track_ids'] == ['one']
     assert 'hidden' not in first.text
     assert 'one.mp3' not in first.text
@@ -191,6 +192,7 @@ def test_weekly_genres_are_on_home_and_open_without_generation(
         'pop',
         'electro',
         'jazz',
+        'techno',
     }
     rock = next(card for card in genres if card['mood'] == 'rock')
     assert rock['count'] == 1
