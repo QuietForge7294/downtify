@@ -151,3 +151,19 @@ def test_generate_national_and_international(store):
     )
     assert {row['id'].split('-')[0] for row in national} == {'fr'}
     assert {row['id'].split('-')[0] for row in international} == {'intl'}
+
+
+def test_mood_catalog_labels_and_colours_every_theme():
+    from downtify.music_ai.playlists import mood_catalog
+
+    catalog = mood_catalog('fr')
+    assert [row['name'] for row in catalog] == list(MOODS) + genre_variants('fr')
+    weekly = [row for row in catalog if row['group'] == 'weekly']
+    labels = {row['name']: row['label'] for row in weekly}
+    assert labels['pop-nat'] == 'Pop · national'
+    assert labels['jazz-intl'] == 'Jazz · international'
+    assert {row['base'] for row in weekly} == set(GENRE_THEMES)
+    assert all(row['color'].startswith('#') for row in catalog)
+    assert [row['name'] for row in mood_catalog('en')] == (
+        list(MOODS) + list(GENRE_THEMES)
+    )

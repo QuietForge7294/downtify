@@ -21,6 +21,7 @@ from . import covers
 from .playlists import (
     genre_variants,
     is_genre_theme,
+    mood_catalog,
     period,
     stored_selections,
     summaries,
@@ -355,6 +356,7 @@ def capabilities(request: Request):
         'features': store().effective(uid),
         'model': store().metadata('model', {'ready': False}),
         'moods': list(MOODS) + genre_variants(owner_language(request)),
+        'moods_meta': mood_catalog(owner_language(request)),
         'dj': dj,
         'source_available': Path('/downtify/music-ai-source.tar.gz').is_file(),
     }

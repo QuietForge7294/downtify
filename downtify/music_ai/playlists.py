@@ -41,6 +41,37 @@ NATIONAL_MARKERS = {
 }
 
 
+# Client-facing metadata for every theme. The app renders whatever this list
+# advertises, so a new mix only needs a server-side entry: no APK update.
+MOOD_LABELS = {
+    'calme': 'Calme',
+    'concentration': 'Concentration',
+    'energie': 'Motivation',
+    'fete': 'Fête',
+    'melancolie': 'Mélancolie',
+    'detente': 'Détente',
+    'rap': 'Rap & Hip-Hop',
+    'rock': 'Rock',
+    'electro': 'Électro',
+    'pop': 'Pop',
+    'jazz': 'Jazz',
+}
+MOOD_COLORS = {
+    'calme': '#4F46E5',
+    'concentration': '#334155',
+    'energie': '#C2410C',
+    'fete': '#A21CAF',
+    'melancolie': '#1D4ED8',
+    'detente': '#0F766E',
+    'rap': '#854D0E',
+    'rock': '#B91C1C',
+    'electro': '#0369A1',
+    'pop': '#BE185D',
+    'jazz': '#7C3AED',
+}
+DEFAULT_MOOD_COLOR = '#0F766E'
+
+
 def _language(lang):
     return str(lang or 'en').split('-')[0].strip().lower() or 'en'
 
@@ -78,6 +109,44 @@ def genre_variants(lang='en'):
             variants.append(f'{genre}-intl')
         return variants
     return list(GENRE_THEMES)
+
+
+def mood_catalog(lang='en'):
+    """Descriptors for every advertised theme: name, label, colour, group.
+
+    Kept additive next to ``moods`` so older clients keep working. The whole
+    mix shelf is data-driven: adding a genre here makes it appear in updated
+    clients without shipping a new application build.
+    """
+    rows = []
+    for mood in MOODS:
+        if mood in GENRE_THEMES:
+            continue
+        rows.append(
+            {
+                'name': mood,
+                'label': MOOD_LABELS.get(mood, mood.title()),
+                'color': MOOD_COLORS.get(mood, DEFAULT_MOOD_COLOR),
+                'group': 'daily',
+            }
+        )
+    for theme in genre_variants(lang):
+        genre, variant = _split_genre_theme(theme)
+        label = MOOD_LABELS.get(genre, genre.title())
+        if variant == 'national':
+            label = f'{label} · national'
+        elif variant == 'international':
+            label = f'{label} · international'
+        rows.append(
+            {
+                'name': theme,
+                'label': label,
+                'color': MOOD_COLORS.get(genre, DEFAULT_MOOD_COLOR),
+                'group': 'weekly',
+                'base': genre,
+            }
+        )
+    return rows
 
 
 def themes(cadence, lang='en'):
